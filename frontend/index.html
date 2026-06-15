@@ -1,0 +1,168 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kGPT — Your Private AI Assistant</title>
+  <link rel="stylesheet" href="/css/style.css?v=2">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+</head>
+<body>
+
+<div class="app-layout">
+
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar">
+    <button class="new-chat-btn" onclick="newConversation()">
+      <span class="icon">➕</span> New Chat
+    </button>
+
+    <div class="conv-list" id="conv-list"></div>
+
+    <div class="sidebar-bottom">
+      <button class="nav-btn" data-view="dashboard" onclick="showView('dashboard')">
+        <span class="icon">📊</span> Dashboard
+      </button>
+      <div class="user-info">
+        <div class="user-avatar" id="user-avatar">?</div>
+        <div>
+          <div class="user-name" id="user-name">Loading...</div>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-sm" style="width:100%;justify-content:center" onclick="logout()">
+        Sign Out
+      </button>
+    </div>
+  </aside>
+
+  <!-- ===== MAIN CONTENT ===== -->
+  <main style="overflow:hidden;display:flex;flex-direction:column">
+
+    <!-- ===== CHAT VIEW ===== -->
+    <div id="view-chat" style="display:flex;flex-direction:column;height:100%;overflow:hidden">
+
+      <!-- Chat Header -->
+      <div class="chat-header">
+        <div class="chat-header-left">
+          <h2>kGPT</h2>
+        </div>
+        <div class="chat-header-actions">
+          <button class="theme-toggle-btn-header" id="theme-toggle" onclick="toggleTheme()" title="Toggle Theme">
+            <span class="theme-icon">🌙</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div class="chat-messages-container">
+        <div class="chat-messages" id="messages">
+          <div class="empty-state">
+            <div class="big-icon">🧠</div>
+            <h3>Welcome to kGPT</h3>
+            <p>One clean input box. kGPT automatically decides which tool to run based on your prompt.</p>
+
+            <div class="suggestions-grid">
+              <div class="suggestion-card" onclick="useHint('Search for the latest AI news')">
+                <div class="suggestion-icon">🌐</div>
+                <div class="suggestion-title">Web Search</div>
+                <div class="suggestion-text">"Search for the latest AI news"</div>
+              </div>
+              <div class="suggestion-card" onclick="useHint('Explain the main points of my uploaded document')">
+                <div class="suggestion-icon">📄</div>
+                <div class="suggestion-title">Document Chat</div>
+                <div class="suggestion-text">"Explain the main points of my uploaded document"</div>
+              </div>
+              <div class="suggestion-card" onclick="useHint('Write and run Python code to plot a sine wave')">
+                <div class="suggestion-icon">💻</div>
+                <div class="suggestion-title">Code Execution</div>
+                <div class="suggestion-text">"Write and run Python code to plot a sine wave"</div>
+              </div>
+              <div class="suggestion-card" onclick="useHint('Query the database to show registered users')">
+                <div class="suggestion-icon">🗄️</div>
+                <div class="suggestion-title">SQL Query</div>
+                <div class="suggestion-text">"Query the database to show registered users"</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input -->
+      <div class="chat-input-area">
+        <div class="input-container-centered">
+          <div class="input-row">
+            <button class="attach-btn" id="attach-btn" onclick="document.getElementById('image-input').click()" title="Attach image or document">📎</button>
+            <div class="input-wrapper">
+              <textarea
+                id="chat-input"
+                rows="1"
+                placeholder="Ask kGPT anything..."
+              ></textarea>
+            </div>
+            <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Send">➤</button>
+          </div>
+          <input type="file" id="image-input" multiple accept="image/*,.pdf,.docx,.doc,.csv,.txt,.md,.json,.html,.htm,.xml,.yaml,.yml,.tsv,.rtf,.log,.ini,.toml,.py,.js,.ts,.java,.c,.cpp,.h,.go,.rb,.css,.sql,.sh,.xlsx,.xlsm,.pptx" style="display:none">
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== DASHBOARD VIEW ===== -->
+    <div id="view-dashboard" class="dashboard-page" style="display:none;flex:1">
+      <div class="dashboard-content">
+        <h1>Dashboard</h1>
+        <p class="subtitle">Your kGPT usage at a glance.</p>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">💬</div>
+            <div class="stat-value" id="stat-messages">0</div>
+            <div class="stat-label">Total Messages</div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Messages by Tool</h3>
+            <div class="mode-bars" id="mode-bars"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Activity (last 7 days)</h3>
+            <div id="activity-chart"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="/js/chat.js?v=2"></script>
+<script src="/js/dashboard.js?v=2"></script>
+<script>
+  /* ===== View switching ===== */
+  const VIEW_DISPLAY = { chat: 'flex', dashboard: 'block' };
+
+  function showView(name) {
+    ['chat', 'dashboard'].forEach(v => {
+      const el = document.getElementById('view-' + v);
+      if (el) el.style.display = (v === name) ? (VIEW_DISPLAY[v] || 'block') : 'none';
+    });
+    document.querySelectorAll('.nav-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.view === name)
+    );
+    if (name === 'dashboard' && typeof loadDashboard === 'function') loadDashboard();
+  }
+</script>
+
+</body>
+</html>
