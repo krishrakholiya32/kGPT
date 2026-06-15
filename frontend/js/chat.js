@@ -111,6 +111,30 @@ function regenerate() {
   getAnswer(lastUserMessage);
 }
 
+// Show a "Regenerate" action on the last assistant message only (re-asks
+// the last user message and replaces that reply).
+function updateRegenerateButton() {
+  document.querySelectorAll('#messages .regenerate-btn').forEach(b => b.remove());
+  if (isLoading || !lastUserMessage) return;
+  const messages = document.querySelectorAll('#messages .message');
+  if (!messages.length) return;
+  const last = messages[messages.length - 1];
+  if (!last.classList.contains('assistant')) return;
+  const actions = last.querySelector('.message-actions');
+  if (!actions) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'msg-action-btn regenerate-btn';
+  btn.type = 'button';
+  btn.textContent = '🔄 Regenerate';
+  btn.addEventListener('click', () => {
+    if (isLoading) return;
+    last.remove();
+    regenerate();
+  });
+  actions.appendChild(btn);
+}
+
 async function getAnswer(message, images) {
   isLoading = true;
   aborted = false;
@@ -139,6 +163,7 @@ async function getAnswer(message, images) {
   isLoading = false;
   abortController = null;
   setGenerating(false);
+  updateRegenerateButton();
   refreshConversationList();
 }
 
@@ -469,6 +494,13 @@ function buildActions(rawText, contentEl) {
   });
   wrap.appendChild(copyBtn);
 
+  const pdfBtn = document.createElement('button');
+  pdfBtn.className = 'msg-action-btn';
+  pdfBtn.type = 'button';
+  pdfBtn.textContent = '\uD83D\uDCC4 Export PDF';
+  pdfBtn.addEventListener('click', () => exportPdf(rawText));
+  wrap.appendChild(pdfBtn);
+
   return wrap;
 }
 
@@ -503,6 +535,7 @@ function editUserMessage(rawText, msgDiv) {
   const toRemove = [];
   while (el) { toRemove.push(el); el = el.nextElementSibling; }
   toRemove.forEach(n => n.remove());
+  updateRegenerateButton();
   // Drop the edited text back into the input box for re-sending.
   const input = document.getElementById('chat-input');
   if (input) {
@@ -614,6 +647,8 @@ function appendMessage(role, content, msgMode = null, imageUrls = null) {
 
   const scrollContainer = document.querySelector('.chat-messages-container');
   if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
+
+  updateRegenerateButton();
 }
 
 function showTyping() {
@@ -831,9 +866,10 @@ async function loadHistory() {
 }
 
 async function clearHistory() {
-  if (!confirm('Clear all chat history?')) return;
+  if (!confirm('Clear ALL chat history across every conversation? This cannot be undone.')) return;
   try {
-    await fetch(`${API}/api/chat/history`, { method: 'DELETE', headers: authHeaders() });
+    const res = await fetch(`${API}/api/chat/history`, { method: 'DELETE', headers: authHeaders() });
+    if (!res.ok) { showToast('Failed to clear history', 'error'); return; }
     lastUserMessage = null;
     document.getElementById('messages').innerHTML = `
       <div class="empty-state">
@@ -842,6 +878,7 @@ async function clearHistory() {
         <p>Start a new conversation below</p>
       </div>
     `;
+    updateRegenerateButton();
     showToast('Chat history cleared', 'success');
   } catch (e) {
     showToast('Failed to clear history', 'error');

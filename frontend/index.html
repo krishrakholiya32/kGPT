@@ -27,6 +27,9 @@
     <div class="conv-list" id="conv-list"></div>
 
     <div class="sidebar-bottom">
+      <button class="nav-btn" data-view="documents" onclick="showView('documents')">
+        <span class="icon">📄</span> Documents
+      </button>
       <button class="nav-btn" data-view="dashboard" onclick="showView('dashboard')">
         <span class="icon">📊</span> Dashboard
       </button>
@@ -36,6 +39,9 @@
           <div class="user-name" id="user-name">Loading...</div>
         </div>
       </div>
+      <button class="btn btn-secondary btn-sm" style="width:100%;justify-content:center;margin-bottom:8px" onclick="clearHistory()" title="Delete all chat history across every conversation">
+        🗑️ Clear History
+      </button>
       <button class="btn btn-secondary btn-sm" style="width:100%;justify-content:center" onclick="logout()">
         Sign Out
       </button>
@@ -140,6 +146,27 @@
       </div>
     </div>
 
+    <!-- ===== DOCUMENTS VIEW ===== -->
+    <div id="view-documents" class="dashboard-page" style="display:none;flex:1">
+      <div class="docs-panel" style="max-width:900px;margin:0 auto;width:100%">
+        <h2>Documents</h2>
+        <p>Upload files or ingest a URL to add knowledge for kGPT's document chat (RAG mode).</p>
+
+        <div class="upload-zone" id="upload-zone">
+          <div class="upload-icon">📄</div>
+          <p><span>Click to upload</span> or drag and drop a file here</p>
+        </div>
+        <input type="file" id="file-input" style="display:none">
+
+        <div class="url-form">
+          <input type="url" id="url-input" placeholder="https://example.com/article">
+          <button class="btn btn-primary" onclick="ingestUrl()">Ingest URL</button>
+        </div>
+
+        <div class="doc-list" id="doc-list"></div>
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -148,12 +175,13 @@
 
 <script src="/js/chat.js?v=2"></script>
 <script src="/js/dashboard.js?v=2"></script>
+<script src="/js/documents.js?v=2"></script>
 <script>
   /* ===== View switching ===== */
-  const VIEW_DISPLAY = { chat: 'flex', dashboard: 'block' };
+  const VIEW_DISPLAY = { chat: 'flex', dashboard: 'block', documents: 'block' };
 
   function showView(name) {
-    ['chat', 'dashboard'].forEach(v => {
+    ['chat', 'dashboard', 'documents'].forEach(v => {
       const el = document.getElementById('view-' + v);
       if (el) el.style.display = (v === name) ? (VIEW_DISPLAY[v] || 'block') : 'none';
     });
@@ -161,6 +189,10 @@
       b.classList.toggle('active', b.dataset.view === name)
     );
     if (name === 'dashboard' && typeof loadDashboard === 'function') loadDashboard();
+    if (name === 'documents') {
+      if (typeof initDropZone === 'function') initDropZone();
+      if (typeof loadDocuments === 'function') loadDocuments();
+    }
   }
 </script>
 
