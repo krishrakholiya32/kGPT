@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 vectorstore/
 documents/
-database/
+/database/
 *.egg-info/
 dist/
 build/
