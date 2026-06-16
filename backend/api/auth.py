@@ -5,9 +5,10 @@ JWT Authentication module for kGPT.
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, field_validator
 from pwdlib import PasswordHash
@@ -153,6 +154,26 @@ async def login(
         )
     access_token = create_access_token(data={"sub": user.username})
     return TokenResponse(access_token=access_token)
+
+
+@auth_router.get("/check")
+async def check_availability(
+    username: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    result = {}
+    if username is not None:
+        v = username.strip()
+        valid_format = bool(re.fullmatch(r"[A-Za-z0-9_]{3,30}", v))
+        taken = bool(valid_format and db.query(User).filter(User.username == v).first())
+        result["username"] = {"valid_format": valid_format, "taken": taken}
+    if email is not None:
+        v = email.strip()
+        valid_format = bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", v))
+        taken = bool(valid_format and db.query(User).filter(User.email == v).first())
+        result["email"] = {"valid_format": valid_format, "taken": taken}
+    return result
 
 
 @auth_router.get("/me", response_model=UserResponse)
