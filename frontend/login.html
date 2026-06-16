@@ -51,8 +51,8 @@
     <!-- Login Form -->
     <div id="form-login">
       <div class="form-group">
-        <label>Username</label>
-        <input type="text" id="login-username" placeholder="Enter your username" autocomplete="username">
+        <label>Email</label>
+        <input type="email" id="login-email" placeholder="Enter your email" autocomplete="email">
       </div>
       <div class="form-group">
         <label>Password</label>
@@ -159,12 +159,12 @@
   }
 
   async function login() {
-    const username = document.getElementById('login-username').value.trim();
+    const email = document.getElementById('login-email').value.trim();
     const password = document.getElementById('login-password').value;
-    if (!username || !password) return showError('Please fill in all fields.');
+    if (!email || !password) return showError('Please fill in all fields.');
 
     const form = new URLSearchParams();
-    form.append('username', username);
+    form.append('username', email);  // OAuth2 form field is always 'username'
     form.append('password', password);
 
     try {
@@ -175,9 +175,7 @@
       });
       const data = await res.json();
       if (res.status === 403) {
-        // Not verified — show resend screen. We don't have the email here, use a prompt fallback.
-        const emailGuess = prompt('Your email is not verified. Enter your email address to resend the verification link:');
-        if (emailGuess) showVerifyPending(emailGuess.trim());
+        showVerifyPending(email);
         return;
       }
       if (!res.ok) return showError(extractError(data, 'Login failed.'));
