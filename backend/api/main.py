@@ -87,9 +87,10 @@ app.include_router(chat_router)
 @app.get("/api/health", tags=["health"])
 async def health_check():
     """Simple health check returning service status, LLM mode, and active provider."""
-    from backend.agent.llm import resolve_provider
+    from backend.agent.llm import candidate_providers
 
-    return {"status": "healthy", "mode": LLM_MODE, "provider": resolve_provider()}
+    providers = candidate_providers()
+    return {"status": "healthy", "mode": LLM_MODE, "provider": providers[0] if providers else "none"}
 
 
 # ---------------------------------------------------------------------------
