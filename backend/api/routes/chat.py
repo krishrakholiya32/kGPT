@@ -102,14 +102,35 @@ def _resolve_conversation(db, user_id, conversation_id, first_message=""):
     return conv
 
 
+def _history_text(memory):
+    msgs = memory.load_memory_variables({}).get("chat_history", [])
+    lines = ""
+    for msg in msgs:
+        role = "User" if msg.type == "human" else "Assistant"
+        lines += f"{role}: {msg.content}\n"
+    return lines
+
+
+def _resolve_search_query(llm, user_message, history_text):
+    """If the message is a short follow-up, expand it into a self-contained search query."""
+    if not history_text or len(user_message.split()) > 6:
+        return user_message
+    prompt = (
+        f"Given this conversation history:\n{history_text}\n"
+        f"The user just said: \"{user_message}\"\n"
+        f"Rewrite their message as a single, self-contained web search query "
+        f"(no explanation, just the query):"
+    )
+    result = llm.invoke(prompt)
+    query = result.content if hasattr(result, "content") else str(result)
+    return query.strip().strip('"')
+
+
 def _run_mode(llm, mode, user_message, memory):
     """Execute a single mode with the given LLM and return the response text."""
+    history_text = _history_text(memory)
+
     if mode == "general":
-        history = memory.load_memory_variables({}).get("chat_history", [])
-        history_text = ""
-        for msg in history:
-            role = "User" if msg.type == "human" else "Assistant"
-            history_text += f"{role}: {msg.content}\n"
         prompt = (
             f"Previous conversation:\n{history_text}\nUser: {user_message}\nAssistant:"
             if history_text
@@ -119,9 +140,12 @@ def _run_mode(llm, mode, user_message, memory):
         return result.content if hasattr(result, "content") else str(result)
 
     if mode == "web":
-        search_results = run_web_search(user_message)
+        search_query = _resolve_search_query(llm, user_message, history_text)
+        search_results = run_web_search(search_query)
         summary_prompt = (
-            f"Based on the following web search results, answer: '{user_message}'\n\n"
+            f"Previous conversation:\n{history_text}\n" if history_text else ""
+        ) + (
+            f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
             f"Search Results:\n{search_results}\n\nAnswer:"
         )
         result = llm.invoke(summary_prompt)
@@ -132,23 +156,17 @@ def _run_mode(llm, mode, user_message, memory):
 
 def _build_stream_prompt(mode, user_message, memory):
     """Return a text prompt for the given mode (general or web), else None."""
+    history_text = _history_text(memory)
+
     if mode == "general":
-        history = memory.load_memory_variables({}).get("chat_history", [])
-        history_text = ""
-        for msg in history:
-            role = "User" if msg.type == "human" else "Assistant"
-            history_text += f"{role}: {msg.content}\n"
         return (
             f"Previous conversation:\n{history_text}\nUser: {user_message}\nAssistant:"
             if history_text
             else f"User: {user_message}\nAssistant:"
         )
     if mode == "web":
-        search_results = run_web_search(user_message)
-        return (
-            f"Based on the following web search results, answer: '{user_message}'\n\n"
-            f"Search Results:\n{search_results}\n\nAnswer:"
-        )
+        # Note: query expansion needs an LLM call — done inline at stream time via candidate_providers
+        return ("__web__", user_message, history_text)
     return None
 
 
@@ -290,6 +308,19 @@ async def chat_stream(
         try:
             yield sse({"type": "meta", "mode": mode, "provider": chosen, "conversation_id": conv_id})
             text_prompt = _build_stream_prompt(mode, user_message, memory)
+
+            if isinstance(text_prompt, tuple):
+                # Web mode: expand short follow-up queries using conversation context
+                _, _msg, _hist = text_prompt
+                search_query = _resolve_search_query(llm, _msg, _hist)
+                search_results = run_web_search(search_query)
+                text_prompt = (
+                    f"Previous conversation:\n{_hist}\n" if _hist else ""
+                ) + (
+                    f"Based on the following web search results, answer the user's question: '{_msg}'\n\n"
+                    f"Search Results:\n{search_results}\n\nAnswer:"
+                )
+
             if text_prompt is not None:
                 for chunk in llm.stream(text_prompt):
                     piece = getattr(chunk, "content", "") or ""
