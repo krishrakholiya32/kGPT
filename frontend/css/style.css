@@ -498,8 +498,7 @@ html, body { height: 100vh; overflow: hidden; }
 .artifact-code { margin: 0; padding: 16px; height: 100%; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--text); }
 
 /* ===== Input alignment ===== */
-.input-row { align-items: center; }
-.input-wrapper textarea { min-height: 44px; box-sizing: border-box; }
+.input-wrapper textarea { min-height: 44px; box-sizing: border-box; padding-top: 11px; padding-bottom: 11px; }
 
 /* ===== Conversation list (sidebar) ===== */
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }

@@ -556,7 +556,7 @@ function exportPdf(rawText) {
   });
   document.body.appendChild(wrapper);
   window.html2pdf()
-    .set({ margin: 10, filename: 'kgpt-answer.pdf', html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4' } })
+    .set({ margin: 10, filename: 'kgpt-answer.pdf', html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true }, jsPDF: { unit: 'mm', format: 'a4' } })
     .from(wrapper)
     .save()
     .then(() => wrapper.remove())
