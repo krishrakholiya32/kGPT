@@ -8,6 +8,9 @@
     each message — answering directly from the LLM, or fetching live web results first —
     and streams the response back token by token.
   </p>
+  <p align="center">
+    <a href="https://k-gpt.duckdns.org"><strong>🌐 Live Demo → k-gpt.duckdns.org</strong></a>
+  </p>
 </p>
 
 ---
@@ -16,15 +19,15 @@
 
 | # | Feature | Description |
 |---|---------|-------------|
-| 1 | 🧭 **Automatic routing** | One endpoint classifies each message as `general` (direct LLM answer) or `web` (live DuckDuckGo search + LLM summary). |
-| 2 | 🔁 **Pluggable LLM providers** | Run on **Groq** (fast, free tier) or **Google Gemini** — switch with a single env var, no code changes. Falls back automatically if the preferred provider fails. |
-| 3 | ⚡ **Streaming responses** | Answers stream in token by token over Server-Sent Events, with a stop button to cancel mid-generation. |
-| 4 | 🌐 **Real-time web search** | Live results via DuckDuckGo (`ddgs`), summarized by the LLM. |
-| 5 | 💬 **Multiple conversations** | Create, switch, rename (double-click the title), and delete separate chat threads — each with its own context. |
-| 6 | 🧠 **Conversation memory** | Per-conversation sliding-window memory for context-aware follow-ups; full history persisted in the database. |
-| 7 | 🎨 **Rich rendering** | Markdown, syntax-highlighted code blocks with copy buttons, LaTeX math (KaTeX), and a live preview panel for HTML/SVG artifacts. |
-| 8 | ✏️ **Message actions** | Copy any message; edit and resend your own prompts; regenerate the last reply. |
-| 9 | 🔐 **User authentication** | JWT-based auth with Argon2 password hashing. |
+| 1 | 🧭 **Automatic routing** | Classifies each message as `general` (direct LLM answer) or `web` (live DuckDuckGo search + LLM summary). |
+| 2 | ⚡ **Streaming responses** | Answers stream token by token over Server-Sent Events, with a stop button to cancel mid-generation. |
+| 3 | 🌐 **Real-time web search** | Live results via DuckDuckGo (`ddgs`), summarised by the LLM. |
+| 4 | 💬 **Multiple conversations** | Create, switch, rename (double-click the title), and delete separate chat threads — each with its own context. |
+| 5 | 🧠 **Conversation memory** | Full history persisted in the database; "continue" after an interrupted stream resumes the correct topic. |
+| 6 | 🎨 **Rich rendering** | Markdown, syntax-highlighted code blocks with copy buttons, LaTeX math (KaTeX), and a live preview panel for HTML/SVG artifacts. |
+| 7 | ✏️ **Message actions** | Copy any message; edit and resend your own prompts; regenerate the last reply. |
+| 8 | 🔐 **Auth + email verification** | JWT-based auth with Argon2 password hashing; new accounts require email verification via Resend before they can log in. |
+| 9 | 🔒 **HTTPS** | Deployed behind Nginx with a Let's Encrypt certificate (auto-renewing). |
 | 10 | 🐳 **Docker deployment** | One-command deployment with Docker Compose. |
 
 ---
@@ -33,16 +36,17 @@
 
 | Layer | Technology |
 |-------|------------|
-| **Backend** | FastAPI, Python 3.11 |
+| **Backend** | FastAPI, Python 3.11+ |
 | **LLM framework** | LangChain (0.3.x line) |
-| **LLM (recommended)** | Groq (`llama-3.3-70b-versatile`, configurable) |
-| **LLM (alternative)** | Google Gemini (`gemini-2.0-flash`) |
+| **LLM** | Groq (`llama-3.3-70b-versatile`, configurable) |
 | **Database** | SQLite + SQLAlchemy |
 | **Authentication** | JWT (PyJWT) + Argon2 (pwdlib) |
+| **Email** | Resend (transactional email for verification) |
 | **Web search** | DuckDuckGo via `ddgs` |
 | **Frontend** | Vanilla HTML / CSS / JS (served as static files by FastAPI) |
 | **Frontend libraries** | marked + DOMPurify (Markdown), highlight.js (code), KaTeX (math) |
-| **Containerization** | Docker + Docker Compose |
+| **Reverse proxy** | Nginx + Let's Encrypt (HTTPS) |
+| **Containerisation** | Docker + Docker Compose |
 
 ---
 
@@ -51,14 +55,13 @@
 ### Prerequisites
 
 - Python 3.11+
-- An LLM provider key:
-  - **Groq** (recommended, free) — <https://console.groq.com/keys>
-  - or **Google Gemini** — <https://aistudio.google.com/apikey>
+- A **Groq** API key (free) — <https://console.groq.com/keys>
+- A **Resend** API key (free, 100 emails/day) — <https://resend.com> *(optional — skip for local dev without email verification)*
 
 ### 1. Clone
 
 ```bash
-git clone https://github.com/your-username/kgpt.git
+git clone https://github.com/krishrakholiya32/kGPT.git
 cd kgpt
 ```
 
@@ -82,12 +85,14 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Then edit `.env`: set a strong `JWT_SECRET_KEY`, and configure your provider — for the
-recommended setup, set `LLM_PROVIDER=groq` and `GROQ_API_KEY=...`. Generate a secret with:
+Edit `.env` — the minimum required fields:
 
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+| Variable | What to set |
+|----------|-------------|
+| `GROQ_API_KEY` | Your Groq API key |
+| `JWT_SECRET_KEY` | A random secret — generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `RESEND_API_KEY` | Your Resend key (leave blank to skip email verification locally) |
+| `APP_BASE_URL` | Base URL of your app (e.g. `http://localhost:8000`) |
 
 ### 5. Run
 
@@ -95,7 +100,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- App UI: <http://localhost:8000/> (redirects to the login page first)
+- App UI: <http://localhost:8000/> (redirects to the login page)
 - Interactive API docs: <http://localhost:8000/docs>
 - Health check: <http://localhost:8000/api/health>
 
@@ -109,11 +114,7 @@ The SQLite database is created automatically on first run.
 docker-compose up -d --build
 ```
 
-This builds and starts a single `kgpt-app` service on port `8000`, with the `database/`
-directory mounted as a volume so data persists across restarts. It reads configuration
-from your `.env` file.
-
-Stop it with:
+Builds and starts a single `kgpt-app` service on port `8000`, with the `database/` directory mounted as a volume so data persists across restarts. Reads configuration from your `.env` file.
 
 ```bash
 docker-compose down
@@ -125,18 +126,17 @@ docker-compose down
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_MODE` | `online` | Informational label reported by `/api/health`. |
-| `LLM_PROVIDER` | _(empty)_ | Force a provider: `groq` or `gemini`. |
-| `LLM_TEMPERATURE` | `0.7` | Sampling temperature. |
-| `GROQ_API_KEY` | — | Groq key (required for `groq` provider). |
+| `GROQ_API_KEY` | — | Groq API key (**required**). |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq chat model. |
-| `GEMINI_API_KEY` | — | Google Gemini key (for `gemini` provider). |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model name. |
+| `LLM_TEMPERATURE` | `0.7` | Sampling temperature. |
 | `JWT_SECRET_KEY` | `change-me-in-production` | Secret used to sign JWTs — **set this**. |
 | `JWT_ALGORITHM` | `HS256` | JWT signing algorithm. |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token lifetime in minutes. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token lifetime in minutes (default 24 h). |
 | `DATABASE_URL` | `sqlite:///./database/data.db` | SQLAlchemy database URL. |
 | `ALLOWED_ORIGINS` | `*` | CORS origins (comma-separated); restrict in production. |
+| `RESEND_API_KEY` | — | Resend API key for verification emails. Leave blank to disable. |
+| `RESEND_FROM_EMAIL` | `onboarding@resend.dev` | Sender address for verification emails. |
+| `APP_BASE_URL` | `http://localhost:8000` | Public URL of your app (used in email verification links). |
 
 ---
 
@@ -146,25 +146,30 @@ docker-compose down
 kgpt/
 ├── backend/
 │   ├── agent/
-│   │   ├── llm.py            # LLM factory: Groq / Gemini with automatic fallback
-│   │   ├── memory.py         # Per-conversation sliding-window memory
+│   │   ├── llm.py            # LLM factory: Groq with candidate_providers fallback
+│   │   ├── email.py          # Resend integration for verification emails
 │   │   └── tools.py          # Web search via DuckDuckGo (ddgs)
 │   ├── api/
 │   │   ├── main.py           # FastAPI app, CORS, startup, static frontend mount
-│   │   ├── auth.py           # JWT auth + register / login / me
+│   │   ├── auth.py           # JWT auth, register/login/verify-email/resend-verification
 │   │   ├── models/
-│   │   │   ├── user.py       # User model + schemas
-│   │   │   └── chat.py       # Conversation & ChatMessage models + request/response schemas
+│   │   │   ├── user.py       # User model (email_verified, verification_token)
+│   │   │   └── chat.py       # Conversation & ChatMessage models + schemas
 │   │   └── routes/
-│   │       └── chat.py       # Chat (auto-routing), streaming, conversations CRUD
+│   │       └── chat.py       # Chat (auto-routing), SSE streaming, conversations CRUD
 │   └── database/
 │       └── db.py             # SQLAlchemy engine, session, init_db, migrations
 ├── frontend/
-│   ├── index.html            # Main app — Chat UI
-│   ├── login.html            # Login / register
+│   ├── index.html            # Main chat UI
+│   ├── login.html            # Login / register (email-based login + verify pending screen)
+│   ├── verify.html           # Email verification landing page
 │   ├── css/style.css
 │   └── js/
 │       └── chat.js
+├── deploy/
+│   ├── kgpt.service          # systemd service file
+│   ├── nginx.conf            # Nginx reverse proxy config
+│   └── setup.sh              # EC2 setup script
 ├── database/                 # SQLite database (gitignored)
 ├── requirements.txt
 ├── Dockerfile
@@ -178,14 +183,17 @@ kgpt/
 
 ## 📡 API Endpoints
 
-All endpoints except register/login require an `Authorization: Bearer <token>` header.
+All endpoints except register/login/verify require an `Authorization: Bearer <token>` header.
 
 ### Authentication
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/auth/register` | Register a new user; returns a JWT. |
-| `POST` | `/api/auth/login` | OAuth2 password login; returns a JWT. |
+| `POST` | `/api/auth/register` | Register a new user; sends verification email; returns a JWT. |
+| `POST` | `/api/auth/login` | Login with email + password; returns a JWT. |
+| `POST` | `/api/auth/verify-email` | Verify email with token from the verification link. |
+| `POST` | `/api/auth/resend-verification` | Resend the verification email. |
+| `GET`  | `/api/auth/check` | Check username/email availability (used for inline validation). |
 | `GET`  | `/api/auth/me` | Get the current user. |
 
 ### Chat
@@ -210,9 +218,10 @@ All endpoints except register/login require an `Authorization: Bearer <token>` h
 
 ## 🔒 Security Notes
 
-- **Never commit your real `.env`.** It's gitignored; keep it that way, and rotate any key that has been shared.
+- **Never commit your real `.env`.** It is gitignored; keep it that way, and rotate any key that has been shared.
 - Set a strong, unique `JWT_SECRET_KEY` before deploying.
-- CORS defaults to `*` for local development — restrict `ALLOWED_ORIGINS` for production.
+- CORS defaults to `*` for local development — restrict `ALLOWED_ORIGINS` in production.
+- The app is served over HTTPS in production with a Let's Encrypt certificate that auto-renews via Certbot.
 
 ---
 
@@ -247,5 +256,5 @@ SOFTWARE.
 ---
 
 <p align="center">
-  Built with FastAPI, LangChain, and Groq.
+  Built with FastAPI, LangChain, and Groq · Deployed on AWS EC2 with Nginx + Let's Encrypt
 </p>
