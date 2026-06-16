@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -10,6 +10,26 @@
     .field-hint.ok    { color: #4caf50; }
     .field-hint.error { color: #ef5350; }
     .field-hint.loading { color: var(--text-muted); }
+
+    /* Email verification pending screen */
+    #verify-pending { display: none; text-align: center; padding: 8px 0 4px; }
+    #verify-pending .verify-icon { font-size: 48px; margin-bottom: 16px; }
+    #verify-pending h2 { margin: 0 0 10px; font-size: 20px; color: var(--text-primary, #111); }
+    #verify-pending p  { color: var(--text-muted, #888); font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+    #verify-pending .verify-email-addr {
+      display: inline-block; background: var(--bg-secondary, #f5f5f5);
+      padding: 6px 14px; border-radius: 6px; font-weight: 600; margin-bottom: 20px;
+      word-break: break-all;
+    }
+    #resend-btn {
+      background: none; border: 1px solid var(--border, #ddd); border-radius: 8px;
+      padding: 10px 22px; cursor: pointer; font-size: 14px; color: var(--text-secondary, #555);
+      transition: all .2s;
+    }
+    #resend-btn:hover { background: var(--bg-secondary, #f5f5f5); }
+    #resend-msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+    .back-link { display: block; margin-top: 16px; font-size: 13px; color: var(--text-muted, #999); cursor: pointer; }
+    .back-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -20,7 +40,8 @@
       <p>Your Private AI Assistant</p>
     </div>
 
-    <div class="auth-tabs">
+    <!-- Tabs (hidden when verify-pending is shown) -->
+    <div class="auth-tabs" id="auth-tabs">
       <div class="auth-tab active" id="tab-login" onclick="switchTab('login')">Login</div>
       <div class="auth-tab" id="tab-register" onclick="switchTab('register')">Register</div>
     </div>
@@ -65,11 +86,25 @@
         Create Account →
       </button>
     </div>
+
+    <!-- Email verification pending screen -->
+    <div id="verify-pending">
+      <div class="verify-icon">📧</div>
+      <h2>Check your inbox</h2>
+      <p>We sent a verification link to:</p>
+      <span class="verify-email-addr" id="verify-email-display"></span>
+      <p>Click the link in the email to activate your account.<br>
+         The link expires in 24 hours.</p>
+      <button id="resend-btn" onclick="resendVerification()">Resend verification email</button>
+      <div id="resend-msg"></div>
+      <span class="back-link" onclick="showLoginForm()">← Back to login</span>
+    </div>
   </div>
 </div>
 
 <script>
   const API = '';
+  let pendingEmail = '';
 
   // Redirect if already logged in
   if (localStorage.getItem('kgpt_token')) {
@@ -94,8 +129,22 @@
     document.getElementById('auth-error').classList.remove('show');
   }
 
-  // FastAPI returns `detail` as a string for HTTPExceptions, but as a list of
-  // error objects for request-validation (422) errors. Handle both.
+  function showVerifyPending(email) {
+    pendingEmail = email;
+    document.getElementById('verify-email-display').textContent = email;
+    document.getElementById('auth-tabs').style.display = 'none';
+    document.getElementById('form-login').style.display = 'none';
+    document.getElementById('form-register').style.display = 'none';
+    document.getElementById('auth-error').classList.remove('show');
+    document.getElementById('verify-pending').style.display = 'block';
+  }
+
+  function showLoginForm() {
+    document.getElementById('verify-pending').style.display = 'none';
+    document.getElementById('auth-tabs').style.display = '';
+    switchTab('login');
+  }
+
   function extractError(data, fallback) {
     const d = data && data.detail;
     if (!d) return fallback;
@@ -125,6 +174,12 @@
         body: form
       });
       const data = await res.json();
+      if (res.status === 403) {
+        // Not verified — show resend screen. We don't have the email here, use a prompt fallback.
+        const emailGuess = prompt('Your email is not verified. Enter your email address to resend the verification link:');
+        if (emailGuess) showVerifyPending(emailGuess.trim());
+        return;
+      }
       if (!res.ok) return showError(extractError(data, 'Login failed.'));
       localStorage.setItem('kgpt_token', data.access_token);
       window.location.href = '/index.html';
@@ -147,10 +202,40 @@
       });
       const data = await res.json();
       if (!res.ok) return showError(extractError(data, 'Registration failed.'));
-      localStorage.setItem('kgpt_token', data.access_token);
-      window.location.href = '/index.html';
+
+      if (data.email_verified === false) {
+        // Store token (for future use after verification) but stay on verify screen
+        localStorage.setItem('kgpt_token', data.access_token);
+        showVerifyPending(email);
+      } else {
+        localStorage.setItem('kgpt_token', data.access_token);
+        window.location.href = '/index.html';
+      }
     } catch (e) {
       showError('Connection error. Make sure the server is running.');
+    }
+  }
+
+  async function resendVerification() {
+    const btn = document.getElementById('resend-btn');
+    const msg = document.getElementById('resend-msg');
+    btn.disabled = true;
+    msg.style.color = 'var(--text-muted, #888)';
+    msg.textContent = 'Sending…';
+    try {
+      const res = await fetch(`${API}/api/auth/resend-verification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pendingEmail })
+      });
+      const data = await res.json();
+      msg.style.color = '#4caf50';
+      msg.textContent = data.message || 'Sent! Check your inbox.';
+    } catch {
+      msg.style.color = '#ef5350';
+      msg.textContent = 'Failed to send. Please try again.';
+    } finally {
+      setTimeout(() => { btn.disabled = false; }, 30000);
     }
   }
 
@@ -207,6 +292,7 @@
   // Enter key support
   document.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
+      if (document.getElementById('verify-pending').style.display !== 'none') return;
       const tab = document.getElementById('tab-login').classList.contains('active') ? 'login' : 'register';
       tab === 'login' ? login() : register();
     }
