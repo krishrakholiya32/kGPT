@@ -94,24 +94,3 @@ def build_llm(provider: str):
 def get_llm():
     """Return a chat model for the preferred provider."""
     return build_llm(resolve_provider())
-
-
-def build_vision_llm():
-    """Construct a vision-capable chat model for image understanding.
-
-    Uses Groq's natively-multimodal Llama 4 Scout by default (free tier).
-    Requires GROQ_API_KEY. Override the model with GROQ_VISION_MODEL.
-    """
-    cfg = _env()
-    if not cfg["groq_key"]:
-        raise ValueError("GROQ_API_KEY is required for image understanding.")
-    from langchain_groq import ChatGroq
-
-    model = os.getenv(
-        "GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"
-    )
-    return ChatGroq(
-        model=model,
-        groq_api_key=cfg["groq_key"],
-        temperature=cfg["temperature"],
-    )

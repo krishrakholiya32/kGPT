@@ -61,8 +61,6 @@ class Conversation(Base):
 class ChatRequest(BaseModel):
     message: str = ""
     mode: str = "auto"
-    image: Optional[str] = None
-    images: Optional[List[str]] = None
     conversation_id: Optional[int] = None
 
 

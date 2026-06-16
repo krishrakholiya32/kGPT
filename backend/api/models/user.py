@@ -1,12 +1,12 @@
 """
-User & UsageStat Models for kGPT.
+User Models for kGPT.
 """
 
 from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime
 
 from backend.database.db import Base
 
@@ -26,23 +26,6 @@ class User(Base):
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}')>"
-
-
-class UsageStat(Base):
-    __tablename__ = "usage_stats"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    mode = Column(String(50), nullable=False)
-    tokens_used = Column(Integer, default=0)
-    timestamp = Column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-
-    def __repr__(self):
-        return f"<UsageStat(id={self.id}, user_id={self.user_id}, mode='{self.mode}')>"
 
 
 # Pydantic Schemas
