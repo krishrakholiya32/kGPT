@@ -177,11 +177,13 @@ def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
 
 
 def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None):
-    """Save a user/assistant exchange using a fresh DB session (safe during streaming)."""
+    """Save a user/assistant exchange using a fresh DB session (safe during streaming).
+    Always saves the user message; saves assistant reply only if answer is non-empty."""
     db = SessionLocal()
     try:
         _save_message(db, user_id, "user", user_message, mode, conversation_id)
-        _save_message(db, user_id, "assistant", answer, mode, conversation_id)
+        if answer:
+            _save_message(db, user_id, "assistant", answer, mode, conversation_id)
         if conversation_id:
             conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
             if conv:
@@ -334,13 +336,13 @@ async def chat_stream(
             collected.append(f"An error occurred: {exc}")
             yield sse({"type": "error", "message": str(exc)})
         finally:
-            # Always persist — even partial replies — so "continue" has context
+            # Always persist — saves user message so "continue" has context even if
+            # the stream was cut short before any reply chunks arrived.
             answer = "".join(collected)
-            if answer:
-                try:
-                    _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
-                except Exception:
-                    traceback.print_exc()
+            try:
+                _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
+            except Exception:
+                traceback.print_exc()
             print(f"[kGPT] streamed mode={mode} provider={chosen}")
 
     return StreamingResponse(
