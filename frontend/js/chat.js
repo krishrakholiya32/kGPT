@@ -3,6 +3,24 @@
 const API = '';
 const token = () => localStorage.getItem('kgpt_token');
 
+// Works on both HTTP and HTTPS
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).catch(() => _fallbackCopy(text));
+  } else {
+    _fallbackCopy(text);
+  }
+}
+function _fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand('copy'); } catch {}
+  document.body.removeChild(ta);
+}
+
 let isLoading = false;
 let currentUser = null;
 let lastUserMessage = null;
@@ -385,7 +403,7 @@ function enhanceCodeBlocks(scope) {
     btn.type = 'button';
     btn.textContent = 'Copy';
     btn.addEventListener('click', () => {
-      navigator.clipboard.writeText(codeText);
+      copyToClipboard(codeText);
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
     });
@@ -479,7 +497,7 @@ function buildActions(rawText, contentEl) {
   copyBtn.type = 'button';
   copyBtn.textContent = '\uD83D\uDCCB Copy';
   copyBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(rawText);
+    copyToClipboard(rawText);
     showToast('Copied to clipboard', 'success');
   });
   wrap.appendChild(copyBtn);
@@ -496,7 +514,7 @@ function buildUserActions(rawText, msgDiv) {
   copyBtn.type = 'button';
   copyBtn.textContent = '\uD83D\uDCCB Copy';
   copyBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(rawText);
+    copyToClipboard(rawText);
     showToast('Copied to clipboard', 'success');
   });
   wrap.appendChild(copyBtn);
