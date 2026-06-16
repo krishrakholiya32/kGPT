@@ -9,7 +9,5 @@ services:
     env_file:
       - .env
     volumes:
-      - ./vectorstore:/app/vectorstore
-      - ./documents:/app/documents
       - ./database:/app/database
     restart: unless-stopped

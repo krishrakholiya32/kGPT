@@ -2,7 +2,7 @@
 FastAPI application entry-point for kGPT.
 
 - Registers CORS middleware (configurable via ALLOWED_ORIGINS env var).
-- Runs DB init and ensures required directories on startup (via lifespan).
+- Runs DB init on startup (via lifespan).
 - Mounts the frontend SPA as static files at the root.
 - Includes all API routers.
 """
@@ -18,18 +18,12 @@ from fastapi.staticfiles import StaticFiles
 from backend.database.db import init_db
 from backend.api.auth import auth_router
 from backend.api.routes.chat import chat_router
-from backend.api.routes.documents import documents_router
-from backend.api.routes.dashboard import dashboard_router
 
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 
 LLM_MODE: str = os.getenv("LLM_MODE", "online")
-
-UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./documents")
-VECTORSTORE_DIR: str = os.getenv("VECTORSTORE_DIR", "./vectorstore")
-DATABASE_DIR: str = os.getenv("DATABASE_DIR", "./database")
 
 # CORS: comma-separated list of allowed origins.
 # Use "*" for local development; set your frontend URL in production.
@@ -39,19 +33,13 @@ ALLOW_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.stri
 
 
 # ---------------------------------------------------------------------------
-# Lifespan: initialise DB and ensure required directories on startup
+# Lifespan: initialise DB on startup
 # ---------------------------------------------------------------------------
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Database tables
     init_db()
-
-    # Ensure upload / vectorstore / database dirs exist
-    for directory in (UPLOAD_DIR, VECTORSTORE_DIR, DATABASE_DIR):
-        Path(directory).mkdir(parents=True, exist_ok=True)
-
     yield
 
 
@@ -61,7 +49,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="kGPT API",
-    description="Private AI assistant with RAG, web search, SQL, and code execution.",
+    description="Private AI assistant with general chat and web search.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -89,8 +77,6 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(chat_router)
-app.include_router(documents_router)
-app.include_router(dashboard_router)
 
 
 # ---------------------------------------------------------------------------

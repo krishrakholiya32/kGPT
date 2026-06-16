@@ -8,8 +8,6 @@ let currentUser = null;
 let lastUserMessage = null;
 let abortController = null;
 let aborted = false;
-let pendingImages = [];
-const MAX_IMAGES = 5;
 let currentConversationId = null;
 
 // ===== Init =====
@@ -73,16 +71,14 @@ async function sendMessage() {
   if (isLoading) { stopGenerating(); return; }
   const input = document.getElementById('chat-input');
   const message = input.value.trim();
-  const images = pendingImages.slice();
-  if (!message && images.length === 0) return;
+  if (!message) return;
 
   input.value = '';
   input.style.height = 'auto';
 
-  appendMessage('user', message, null, images);
+  appendMessage('user', message);
   lastUserMessage = message;
-  clearAttachments();
-  await getAnswer(message, images);
+  await getAnswer(message);
 }
 
 function stopGenerating() {
@@ -135,27 +131,21 @@ function updateRegenerateButton() {
   actions.appendChild(btn);
 }
 
-async function getAnswer(message, images) {
+async function getAnswer(message) {
   isLoading = true;
   aborted = false;
   abortController = new AbortController();
   setGenerating(true);
   const typingId = showTyping();
 
-  const hasImages = images && images.length > 0;
   let handled = false;
   try {
-    handled = await streamAnswer(message, typingId, images);
+    handled = await streamAnswer(message, typingId);
   } catch (e) {
     handled = false;
   }
   if (!handled && !aborted) {
-    if (hasImages) {
-      removeTyping(typingId);
-      appendMessage('assistant', 'Sorry, I could not process the image(s). Please try again.');
-    } else {
-      await nonStreamAnswer(message, typingId);
-    }
+    await nonStreamAnswer(message, typingId);
   } else if (!handled && aborted) {
     removeTyping(typingId);
   }
@@ -169,13 +159,13 @@ async function getAnswer(message, images) {
 
 // Streaming path (Server-Sent Events). Returns true if it rendered something,
 // false if it failed before rendering (so the caller falls back).
-async function streamAnswer(message, typingId, images) {
+async function streamAnswer(message, typingId) {
   let res;
   try {
     res = await fetch(`${API}/api/chat/stream`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ message, mode: 'auto', images: (images && images.length) ? images : null, conversation_id: currentConversationId }),
+      body: JSON.stringify({ message, mode: 'auto', conversation_id: currentConversationId }),
       signal: abortController ? abortController.signal : undefined
     });
   } catch (e) {
@@ -280,8 +270,8 @@ function startAssistantBubble(mode) {
   contentEl.className = 'message-content';
 
   if (mode && mode !== 'auto' && mode !== 'general') {
-    const modeIcons = { rag: '\uD83D\uDCC4', web: '\uD83C\uDF10', sql: '\uD83D\uDDC4\uFE0F', code: '\uD83D\uDCBB', vision: '\uD83D\uDDBC\uFE0F' };
-    const modeNames = { rag: 'Document Chat', web: 'Web Search', sql: 'SQL Query', code: 'Code Execution', vision: 'Image' };
+    const modeIcons = { web: '\uD83C\uDF10' };
+    const modeNames = { web: 'Web Search' };
     const badge = document.createElement('div');
     badge.className = 'tool-badge';
     badge.innerHTML = `<span>${modeIcons[mode] || '\uD83E\uDDE0'}</span> ${modeNames[mode] || 'Tool'}`;
@@ -574,7 +564,7 @@ function exportPdf(rawText) {
 }
 
 // ===== Messages =====
-function appendMessage(role, content, msgMode = null, imageUrls = null) {
+function appendMessage(role, content, msgMode = null) {
   const container = document.getElementById('messages');
 
   const empty = container.querySelector('.empty-state');
@@ -599,23 +589,12 @@ function appendMessage(role, content, msgMode = null, imageUrls = null) {
 
   // Tool badge (assistant + specific tool)
   if (role === 'assistant' && msgMode && msgMode !== 'auto' && msgMode !== 'general') {
-    const modeIcons = { rag: '\uD83D\uDCC4', web: '\uD83C\uDF10', sql: '\uD83D\uDDC4\uFE0F', code: '\uD83D\uDCBB', vision: '\uD83D\uDDBC\uFE0F' };
-    const modeNames = { rag: 'Document Chat', web: 'Web Search', sql: 'SQL Query', code: 'Code Execution', vision: 'Image' };
+    const modeIcons = { web: '\uD83C\uDF10' };
+    const modeNames = { web: 'Web Search' };
     const badge = document.createElement('div');
     badge.className = 'tool-badge';
     badge.innerHTML = `<span>${modeIcons[msgMode] || '\uD83E\uDDE0'}</span> ${modeNames[msgMode] || 'Tool'}`;
     contentEl.appendChild(badge);
-  }
-
-  // Attached image(s) (user message)
-  if (role === 'user' && imageUrls) {
-    const arr = Array.isArray(imageUrls) ? imageUrls : [imageUrls];
-    arr.forEach(src => {
-      const img = document.createElement('img');
-      img.className = 'message-image';
-      img.src = src;
-      contentEl.appendChild(img);
-    });
   }
 
   const md = document.createElement('div');
@@ -685,7 +664,19 @@ function emptyStateHtml() {
     <div class="empty-state">
       <div class="big-icon">\uD83E\uDDE0</div>
       <h3>Welcome to kGPT</h3>
-      <p>One clean input box. kGPT automatically decides which tool to run based on your prompt.</p>
+      <p>One clean input box. kGPT automatically decides whether to answer directly or search the web.</p>
+      <div class="suggestions-grid">
+        <div class="suggestion-card" onclick="useHint('Search for the latest AI news')">
+          <div class="suggestion-icon">\uD83C\uDF10</div>
+          <div class="suggestion-title">Web Search</div>
+          <div class="suggestion-text">"Search for the latest AI news"</div>
+        </div>
+        <div class="suggestion-card" onclick="useHint('Explain how neural networks work')">
+          <div class="suggestion-icon">\uD83E\uDDE0</div>
+          <div class="suggestion-title">General Chat</div>
+          <div class="suggestion-text">"Explain how neural networks work"</div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -755,7 +746,6 @@ function highlightActiveConversation() {
 async function switchConversation(id) {
   if (isLoading) stopGenerating();
   currentConversationId = id;
-  if (typeof showView === 'function') showView('chat');
   highlightActiveConversation();
   await loadConversationMessages(id);
 }
@@ -786,7 +776,6 @@ async function newConversation() {
   const c = await createConversationApi();
   if (!c) { showToast('Could not create chat', 'error'); return; }
   currentConversationId = c.id;
-  if (typeof showView === 'function') showView('chat');
   document.getElementById('messages').innerHTML = emptyStateHtml();
   await refreshConversationList();
   const input = document.getElementById('chat-input');
@@ -849,155 +838,6 @@ async function renameConversation(id, title) {
   }
 }
 
-// ===== History =====
-async function loadHistory() {
-  try {
-    const res = await fetch(`${API}/api/chat/history`, { headers: authHeaders() });
-    if (!res.ok) return;
-    const messages = await res.json();
-    if (messages.length === 0) return;
-
-    const container = document.getElementById('messages');
-    container.innerHTML = '';
-    messages.forEach(msg => {
-      appendMessage(msg.role, msg.content, msg.mode || null);
-    });
-  } catch (e) {}
-}
-
-async function clearHistory() {
-  if (!confirm('Clear ALL chat history across every conversation? This cannot be undone.')) return;
-  try {
-    const res = await fetch(`${API}/api/chat/history`, { method: 'DELETE', headers: authHeaders() });
-    if (!res.ok) { showToast('Failed to clear history', 'error'); return; }
-    lastUserMessage = null;
-    document.getElementById('messages').innerHTML = `
-      <div class="empty-state">
-        <div class="big-icon">\uD83E\uDDE0</div>
-        <h3>Chat cleared</h3>
-        <p>Start a new conversation below</p>
-      </div>
-    `;
-    updateRegenerateButton();
-    showToast('Chat history cleared', 'success');
-  } catch (e) {
-    showToast('Failed to clear history', 'error');
-  }
-}
-
-// ===== Attach (images -> vision, documents -> knowledge base) =====
-function initImage() {
-  const fileInput = document.getElementById('image-input');
-  if (!fileInput) return;
-  fileInput.addEventListener('change', () => {
-    const files = Array.from(fileInput.files || []);
-    fileInput.value = '';
-    files.forEach(handleAttachedFile);
-  });
-}
-
-function handleAttachedFile(file) {
-  if (file.type.startsWith('image/')) {
-    if (pendingImages.length >= MAX_IMAGES) { showToast(`Up to ${MAX_IMAGES} images per message`, 'warning'); return; }
-    if (file.size > 4 * 1024 * 1024) { showToast(`${file.name}: image too large (max 4MB)`, 'warning'); return; }
-    const reader = new FileReader();
-    reader.onload = () => { pendingImages.push(reader.result); addImageChip(reader.result); };
-    reader.readAsDataURL(file);
-  } else {
-    uploadDocument(file);
-  }
-}
-
-async function uploadDocument(file) {
-  const chip = addDocChip(file.name, 'uploading...');
-  try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch(`${API}/api/documents/upload`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token()}` },
-      body: fd
-    });
-    if (res.ok) {
-      updateDocChip(chip, file.name, 'ready \u2014 ask about it', false);
-      showToast('Document added to knowledge base', 'success');
-    } else {
-      let detail = 'upload failed';
-      try { const d = await res.json(); detail = d.detail || detail; } catch (e) {}
-      updateDocChip(chip, file.name, detail, true);
-      showToast('Upload failed', 'error');
-    }
-  } catch (e) {
-    updateDocChip(chip, file.name, 'upload failed', true);
-    showToast('Upload error', 'error');
-  }
-}
-
-function chipsContainer() {
-  return document.querySelector('.input-container-centered');
-}
-
-function addImageChip(dataUrl) {
-  const container = chipsContainer();
-  if (!container) return;
-  const chip = document.createElement('div');
-  chip.className = 'image-chip';
-  const img = document.createElement('img');
-  img.src = dataUrl;
-  const label = document.createElement('span');
-  label.textContent = 'Image';
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'image-chip-remove';
-  remove.textContent = '\u2715';
-  remove.title = 'Remove image';
-  remove.addEventListener('click', () => {
-    const i = pendingImages.indexOf(dataUrl);
-    if (i >= 0) pendingImages.splice(i, 1);
-    chip.remove();
-  });
-  chip.appendChild(img);
-  chip.appendChild(label);
-  chip.appendChild(remove);
-  container.insertBefore(chip, container.firstChild);
-}
-
-function addDocChip(name, status) {
-  const container = chipsContainer();
-  if (!container) return null;
-  const chip = document.createElement('div');
-  chip.className = 'image-chip';
-  const icon = document.createElement('span');
-  icon.textContent = '\uD83D\uDCC4';
-  const label = document.createElement('span');
-  label.className = 'doc-chip-label';
-  label.textContent = `${name} \u2014 ${status}`;
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'image-chip-remove';
-  remove.textContent = '\u2715';
-  remove.title = 'Dismiss';
-  remove.addEventListener('click', () => chip.remove());
-  chip.appendChild(icon);
-  chip.appendChild(label);
-  chip.appendChild(remove);
-  container.insertBefore(chip, container.firstChild);
-  return chip;
-}
-
-function updateDocChip(chip, name, status, error) {
-  if (!chip) return;
-  const label = chip.querySelector('.doc-chip-label');
-  if (label) label.textContent = `${name} \u2014 ${status}`;
-  chip.style.opacity = error ? '0.7' : '1';
-}
-
-function clearAttachments() {
-  pendingImages = [];
-  const container = chipsContainer();
-  if (container) container.querySelectorAll('.image-chip').forEach(c => c.remove());
-}
-
 // ===== Input Auto-resize =====
 function initInput() {
   const input = document.getElementById('chat-input');
@@ -1034,5 +874,4 @@ function logout() {
 document.addEventListener('DOMContentLoaded', () => {
   init();
   initInput();
-  initImage();
 });

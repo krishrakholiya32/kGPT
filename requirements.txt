@@ -2,29 +2,17 @@
 fastapi
 uvicorn[standard]
 python-dotenv
-python-multipart
-aiofiles
 
 # ===== LangChain =====
-# Pinned below 1.0: this codebase uses the legacy LangChain APIs
-# (langchain.chains.RetrievalQA, langchain.memory.ConversationBufferWindowMemory,
-# langchain.agents.create_react_agent), which were removed in LangChain 1.0.
-# Constraining langchain-core keeps every integration package on the compatible
-# 0.3.x line. If you upgrade to LangChain >=1.0, migrate those APIs first
-# (create_retrieval_chain + LangGraph memory).
+# Pinned below 1.0: langchain.memory.ConversationBufferWindowMemory
+# (backend/agent/memory.py) was removed in LangChain 1.0.
+# Constraining langchain-core keeps every integration package on the
+# compatible 0.3.x line. Upgrade only after migrating to LangGraph memory.
 langchain-core<1.0
 langchain<1.0
 langchain-community<1.0
 langchain-google-genai
-langchain-ollama
-langchain-chroma
-langchain-huggingface
 langchain-groq
-langchain-experimental
-
-# ===== Vector DB / Embeddings =====
-chromadb
-sentence-transformers
 
 # ===== Database =====
 sqlalchemy
@@ -36,20 +24,8 @@ pwdlib[argon2]
 # ===== Search =====
 duckduckgo-search
 
-# ===== Document loaders =====
-pypdf
-python-docx
-pandas
-docx2txt
-
-# ===== HTTP / scraping =====
-requests
-beautifulsoup4
-
 # ===== Validation =====
 pydantic[email]
 
-# web search + office file parsing
+# ===== web search =====
 ddgs
-openpyxl
-python-pptx
