@@ -29,3 +29,6 @@ pydantic[email]
 
 # ===== web search =====
 ddgs
+
+# ===== Email =====
+resend

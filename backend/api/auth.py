@@ -1,14 +1,15 @@
-﻿"""
+"""
 JWT Authentication module for kGPT.
 """
 
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, field_validator
 from pwdlib import PasswordHash
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from backend.database.db import get_db
 from backend.api.models.user import User
+from backend.agent.email import send_verification_email
 
 password_hash = PasswordHash((Argon2Hasher(),))
 
@@ -68,10 +70,16 @@ async def get_current_user(
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please check your inbox.",
+        )
     return user
 
 
-# Pydantic schemas
+# ── Pydantic schemas ──────────────────────────────────────────────────────────
+
 class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
@@ -103,9 +111,12 @@ class RegisterRequest(BaseModel):
             raise ValueError("Password must include at least one special character.")
         return v
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    email_verified: bool = True
+
 
 class UserResponse(BaseModel):
     id: int
@@ -117,6 +128,16 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
@@ -127,17 +148,22 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == request.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    token = secrets.token_urlsafe(32)
     new_user = User(
         username=request.username,
         email=request.email,
         password_hash=hash_password(request.password),
+        email_verified=False,
+        verification_token=token,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
+    send_verification_email(new_user.email, new_user.username, token)
+
     access_token = create_access_token(data={"sub": new_user.username})
-    return TokenResponse(access_token=access_token)
+    return TokenResponse(access_token=access_token, email_verified=False)
 
 
 @auth_router.post("/login", response_model=TokenResponse)
@@ -152,8 +178,38 @@ async def login(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please check your inbox.",
+        )
     access_token = create_access_token(data={"sub": user.username})
     return TokenResponse(access_token=access_token)
+
+
+@auth_router.post("/verify-email", response_model=TokenResponse)
+async def verify_email(request: VerifyEmailRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.verification_token == request.token).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link.")
+    user.email_verified = True
+    user.verification_token = None
+    db.commit()
+    access_token = create_access_token(data={"sub": user.username})
+    return TokenResponse(access_token=access_token, email_verified=True)
+
+
+@auth_router.post("/resend-verification")
+async def resend_verification(request: ResendVerificationRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user or user.email_verified:
+        # Don't reveal whether an email is registered
+        return {"message": "If that address is registered and unverified, a new link has been sent."}
+    token = secrets.token_urlsafe(32)
+    user.verification_token = token
+    db.commit()
+    send_verification_email(user.email, user.username, token)
+    return {"message": "Verification email sent."}
 
 
 @auth_router.get("/check")

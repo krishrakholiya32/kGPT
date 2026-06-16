@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kGPT — Verify Email</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .verify-card {
+      max-width: 440px;
+      margin: 80px auto;
+      background: var(--bg-secondary, #fff);
+      border: 1px solid var(--border, #e0e0e0);
+      border-radius: 16px;
+      padding: 48px 40px;
+      text-align: center;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+    .verify-icon { font-size: 56px; margin-bottom: 20px; }
+    .verify-card h1 { margin: 0 0 4px; font-size: 22px; }
+    .verify-card h1 span { color: #6c63ff; }
+    .verify-card p { color: var(--text-muted, #888); font-size: 14px; line-height: 1.6; margin: 12px 0 0; }
+    #status { margin-top: 24px; font-size: 15px; min-height: 22px; }
+    #status.ok    { color: #4caf50; }
+    #status.error { color: #ef5350; }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border, #e0e0e0);
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 20px auto 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .redirect-msg { font-size: 13px; color: var(--text-muted, #999); margin-top: 8px; }
+    .go-btn {
+      display: inline-block; margin-top: 20px;
+      padding: 12px 28px; background: #6c63ff; color: #fff;
+      text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;
+    }
+    .go-btn:hover { background: #5a52d5; }
+  </style>
+</head>
+<body>
+<div class="verify-card">
+  <div class="verify-icon" id="icon">🔑</div>
+  <h1><span>k</span>GPT</h1>
+  <p id="subtitle">Verifying your email address…</p>
+  <div id="spinner" class="spinner"></div>
+  <div id="status"></div>
+  <a id="go-btn" class="go-btn" href="/index.html" style="display:none">Open kGPT →</a>
+</div>
+
+<script>
+  (async () => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const spinner = document.getElementById('spinner');
+    const status  = document.getElementById('status');
+    const icon    = document.getElementById('icon');
+    const subtitle = document.getElementById('subtitle');
+    const goBtn   = document.getElementById('go-btn');
+
+    if (!token) {
+      spinner.style.display = 'none';
+      icon.textContent = '❌';
+      subtitle.textContent = 'Invalid verification link.';
+      status.textContent = 'No token found in the URL. Please use the link from your email.';
+      status.className = 'error';
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/verify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      const data = await res.json();
+
+      spinner.style.display = 'none';
+
+      if (res.ok) {
+        // Store the fresh verified JWT
+        localStorage.setItem('kgpt_token', data.access_token);
+        icon.textContent = '✅';
+        subtitle.textContent = 'Email verified!';
+        status.textContent = 'Your account is now active. Redirecting…';
+        status.className = 'ok';
+        goBtn.style.display = 'inline-block';
+        setTimeout(() => { window.location.href = '/index.html'; }, 2500);
+      } else {
+        icon.textContent = '❌';
+        subtitle.textContent = 'Verification failed.';
+        const detail = data.detail || 'Invalid or expired verification link.';
+        status.textContent = detail;
+        status.className = 'error';
+        const back = document.createElement('p');
+        back.className = 'redirect-msg';
+        back.innerHTML = '<a href="/login.html">Back to login</a> to request a new link.';
+        document.querySelector('.verify-card').appendChild(back);
+      }
+    } catch (e) {
+      spinner.style.display = 'none';
+      icon.textContent = '❌';
+      subtitle.textContent = 'Connection error.';
+      status.textContent = 'Could not reach the server. Make sure the app is running.';
+      status.className = 'error';
+    }
+  })();
+</script>
+</body>
+</html>

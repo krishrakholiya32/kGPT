@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, DateTime
 
 from backend.database.db import Base
 
@@ -18,6 +18,8 @@ class User(Base):
     username = Column(String(150), unique=True, nullable=False, index=True)
     email = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    verification_token = Column(String(255), nullable=True)
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),
