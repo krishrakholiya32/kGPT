@@ -295,6 +295,7 @@ async def chat_stream(
 
     def event_stream():
         collected = []
+        user_msg_saved = False
         try:
             yield sse({"type": "meta", "mode": mode, "provider": chosen, "conversation_id": conv_id})
             _db = SessionLocal()
@@ -314,6 +315,18 @@ async def chat_stream(
                     f"Search Results:\n{search_results}\n\nAnswer:"
                 )
 
+            # Save user message NOW — after building the prompt (so it won't appear in
+            # history twice) but before streaming starts. The sync generator keeps running
+            # even after the client aborts, so the finally block may arrive too late for
+            # a quick "continue" — saving here ensures the DB is updated immediately.
+            _udb = SessionLocal()
+            try:
+                _save_message(_udb, current_user.id, "user", user_message, mode, conv_id)
+                _udb.commit()
+                user_msg_saved = True
+            finally:
+                _udb.close()
+
             if text_prompt is not None:
                 for chunk in llm.stream(text_prompt):
                     piece = getattr(chunk, "content", "") or ""
@@ -330,17 +343,30 @@ async def chat_stream(
                 yield sse({"type": "chunk", "text": text})
             yield sse({"type": "done"})
         except GeneratorExit:
-            pass  # client disconnected mid-stream — fall through to finally
+            pass
         except Exception as exc:
             traceback.print_exc()
             collected.append(f"An error occurred: {exc}")
             yield sse({"type": "error", "message": str(exc)})
         finally:
-            # Always persist — saves user message so "continue" has context even if
-            # the stream was cut short before any reply chunks arrived.
             answer = "".join(collected)
             try:
-                _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
+                if user_msg_saved:
+                    # User message already saved; only persist the assistant reply.
+                    if answer:
+                        _adb = SessionLocal()
+                        try:
+                            _save_message(_adb, current_user.id, "assistant", answer, mode, conv_id)
+                            if conv_id:
+                                _conv = _adb.query(Conversation).filter(Conversation.id == conv_id).first()
+                                if _conv:
+                                    _conv.updated_at = datetime.now(timezone.utc)
+                            _adb.commit()
+                        finally:
+                            _adb.close()
+                else:
+                    # User message wasn't saved yet (error before that point); save both.
+                    _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
             except Exception:
                 traceback.print_exc()
             print(f"[kGPT] streamed mode={mode} provider={chosen}")
