@@ -484,13 +484,6 @@ function buildActions(rawText, contentEl) {
   });
   wrap.appendChild(copyBtn);
 
-  const pdfBtn = document.createElement('button');
-  pdfBtn.className = 'msg-action-btn';
-  pdfBtn.type = 'button';
-  pdfBtn.textContent = '\uD83D\uDCC4 Export PDF';
-  pdfBtn.addEventListener('click', () => exportPdf(rawText));
-  wrap.appendChild(pdfBtn);
-
   return wrap;
 }
 
@@ -536,32 +529,6 @@ function editUserMessage(rawText, msgDiv) {
   }
 }
 
-function exportPdf(rawText) {
-  if (!window.html2pdf) { showToast('PDF tool still loading, try again', 'warning'); return; }
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText =
-    'position:fixed;left:-10000px;top:0;width:800px;padding:28px;background:#ffffff;color:#111111;' +
-    'font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;';
-  wrapper.innerHTML = renderMarkdown(rawText);
-  renderMath(wrapper);
-  wrapper.querySelectorAll('table').forEach(t => {
-    t.style.borderCollapse = 'collapse'; t.style.width = '100%'; t.style.margin = '10px 0';
-  });
-  wrapper.querySelectorAll('th,td').forEach(c => {
-    c.style.border = '1px solid #999'; c.style.padding = '6px'; c.style.textAlign = 'left';
-  });
-  wrapper.querySelectorAll('pre').forEach(p => {
-    p.style.background = '#f4f4f4'; p.style.padding = '10px'; p.style.borderRadius = '6px';
-    p.style.whiteSpace = 'pre-wrap'; p.style.color = '#111';
-  });
-  document.body.appendChild(wrapper);
-  window.html2pdf()
-    .set({ margin: 10, filename: 'kgpt-answer.pdf', html2canvas: { scale: 2, backgroundColor: '#ffffff', useCORS: true }, jsPDF: { unit: 'mm', format: 'a4' } })
-    .from(wrapper)
-    .save()
-    .then(() => wrapper.remove())
-    .catch(() => wrapper.remove());
-}
 
 // ===== Messages =====
 function appendMessage(role, content, msgMode = null) {
