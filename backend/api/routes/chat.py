@@ -319,21 +319,29 @@ async def chat_stream(
                         collected.append(piece)
                         yield sse({"type": "chunk", "text": piece})
             else:
-                text = _run_mode(llm, mode, user_message, _db, current_user.id, conv_id)
+                _db2 = SessionLocal()
+                try:
+                    text = _run_mode(llm, mode, user_message, _db2, current_user.id, conv_id)
+                finally:
+                    _db2.close()
                 collected.append(text)
                 yield sse({"type": "chunk", "text": text})
             yield sse({"type": "done"})
-            answer = "".join(collected)
+        except GeneratorExit:
+            pass  # client disconnected mid-stream — fall through to finally
         except Exception as exc:
             traceback.print_exc()
-            answer = "".join(collected) or f"An error occurred: {exc}"
+            collected.append(f"An error occurred: {exc}")
             yield sse({"type": "error", "message": str(exc)})
-
-        try:
-            _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
-        except Exception:
-            traceback.print_exc()
-        print(f"[kGPT] streamed mode={mode} provider={chosen}")
+        finally:
+            # Always persist — even partial replies — so "continue" has context
+            answer = "".join(collected)
+            if answer:
+                try:
+                    _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
+                except Exception:
+                    traceback.print_exc()
+            print(f"[kGPT] streamed mode={mode} provider={chosen}")
 
     return StreamingResponse(
         event_stream(),
