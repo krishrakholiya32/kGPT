@@ -282,7 +282,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   background: var(--surface); flex-shrink: 0;
 }
 .input-row {
-  display: flex; gap: 10px; align-items: flex-end;
+  display: flex; gap: 10px; align-items: center;
 }
 .input-wrapper {
   flex: 1; position: relative;
