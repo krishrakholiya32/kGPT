@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>kGPT — Login</title>
   <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .field-hint { display: block; font-size: 12px; margin-top: 4px; min-height: 16px; }
+    .field-hint.ok    { color: #4caf50; }
+    .field-hint.error { color: #ef5350; }
+    .field-hint.loading { color: var(--text-muted); }
+  </style>
 </head>
 <body>
 <div class="auth-page">
@@ -41,10 +47,12 @@
       <div class="form-group">
         <label>Username</label>
         <input type="text" id="reg-username" placeholder="Choose a username" autocomplete="username">
+        <span class="field-hint" id="hint-username"></span>
       </div>
       <div class="form-group">
         <label>Email</label>
         <input type="email" id="reg-email" placeholder="Your email address" autocomplete="email">
+        <span class="field-hint" id="hint-email"></span>
       </div>
       <div class="form-group">
         <label>Password</label>
@@ -145,6 +153,56 @@
       showError('Connection error. Make sure the server is running.');
     }
   }
+
+  // ── Inline validation for register form ─────────────────────────────────
+  function debounce(fn, ms) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  }
+
+  function setHint(id, state, msg) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'field-hint' + (state ? ' ' + state : '');
+  }
+
+  const checkUsername = debounce(async (val) => {
+    val = val.trim();
+    if (!val) { setHint('hint-username', '', ''); return; }
+    if (!/^[A-Za-z0-9_]{3,30}$/.test(val)) {
+      setHint('hint-username', 'error', '3–30 characters, letters/numbers/underscores only');
+      return;
+    }
+    setHint('hint-username', 'loading', 'Checking…');
+    try {
+      const r = await fetch(`/api/auth/check?username=${encodeURIComponent(val)}`);
+      const d = await r.json();
+      d.username.taken
+        ? setHint('hint-username', 'error', 'Username already taken')
+        : setHint('hint-username', 'ok', 'Username available ✓');
+    } catch { setHint('hint-username', '', ''); }
+  }, 500);
+
+  const checkEmail = debounce(async (val) => {
+    val = val.trim();
+    if (!val) { setHint('hint-email', '', ''); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) {
+      setHint('hint-email', 'error', 'Enter a valid email address');
+      return;
+    }
+    setHint('hint-email', 'loading', 'Checking…');
+    try {
+      const r = await fetch(`/api/auth/check?email=${encodeURIComponent(val)}`);
+      const d = await r.json();
+      d.email.taken
+        ? setHint('hint-email', 'error', 'Email already registered')
+        : setHint('hint-email', 'ok', 'Email available ✓');
+    } catch { setHint('hint-email', '', ''); }
+  }, 500);
+
+  document.getElementById('reg-username').addEventListener('input', e => checkUsername(e.target.value));
+  document.getElementById('reg-email').addEventListener('input', e => checkEmail(e.target.value));
 
   // Enter key support
   document.addEventListener('keydown', e => {
