@@ -20,6 +20,7 @@ sqlalchemy
 # ===== Auth =====
 pyjwt[crypto]
 pwdlib[argon2]
+python-multipart
 
 # ===== Search =====
 duckduckgo-search
