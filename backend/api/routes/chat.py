@@ -14,7 +14,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from backend.agent.llm import build_llm, candidate_providers
-from backend.agent.memory import get_memory, clear_memory
 from backend.agent.tools import run_web_search
 from backend.api.auth import get_current_user
 from backend.api.models.chat import ChatMessage, ChatRequest, ChatResponse, Conversation
@@ -102,11 +101,19 @@ def _resolve_conversation(db, user_id, conversation_id, first_message=""):
     return conv
 
 
-def _history_text(memory):
-    msgs = memory.load_memory_variables({}).get("chat_history", [])
+def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
+    """Load recent conversation history directly from DB — works across workers and restarts."""
+    msgs = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.user_id == user_id, ChatMessage.conversation_id == conversation_id)
+        .order_by(ChatMessage.timestamp.desc())
+        .limit(limit * 2)
+        .all()
+    )
+    msgs = list(reversed(msgs))
     lines = ""
     for msg in msgs:
-        role = "User" if msg.type == "human" else "Assistant"
+        role = "User" if msg.role == "user" else "Assistant"
         lines += f"{role}: {msg.content}\n"
     return lines
 
@@ -126,9 +133,9 @@ def _resolve_search_query(llm, user_message, history_text):
     return query.strip().strip('"')
 
 
-def _run_mode(llm, mode, user_message, memory):
+def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM and return the response text."""
-    history_text = _history_text(memory)
+    history_text = _history_text_from_db(db, user_id, conv_id)
 
     if mode == "general":
         prompt = (
@@ -154,9 +161,9 @@ def _run_mode(llm, mode, user_message, memory):
     return f"Unknown mode '{mode}'. Supported: general, web."
 
 
-def _build_stream_prompt(mode, user_message, memory):
+def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     """Return a text prompt for the given mode (general or web), else None."""
-    history_text = _history_text(memory)
+    history_text = _history_text_from_db(db, user_id, conv_id)
 
     if mode == "general":
         return (
@@ -165,12 +172,11 @@ def _build_stream_prompt(mode, user_message, memory):
             else f"User: {user_message}\nAssistant:"
         )
     if mode == "web":
-        # Note: query expansion needs an LLM call — done inline at stream time via candidate_providers
         return ("__web__", user_message, history_text)
     return None
 
 
-def _persist_exchange(user_id, user_message, answer, mode, memory, conversation_id=None):
+def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None):
     """Save a user/assistant exchange using a fresh DB session (safe during streaming)."""
     db = SessionLocal()
     try:
@@ -183,10 +189,6 @@ def _persist_exchange(user_id, user_message, answer, mode, memory, conversation_
         db.commit()
     finally:
         db.close()
-    try:
-        memory.save_context({"input": user_message}, {"output": answer})
-    except Exception:
-        pass
 
 
 @chat_router.post("", response_model=ChatResponse)
@@ -200,7 +202,6 @@ async def chat(
 
     conv = _resolve_conversation(db, current_user.id, request.conversation_id, user_message)
     conv_id = conv.id
-    memory = get_memory(f"{current_user.id}:{conv_id}")
 
     providers = candidate_providers()
     response_text = None
@@ -208,8 +209,6 @@ async def chat(
     used_provider = None
     last_error = None
 
-    # Try the preferred provider, then transparently fall back to any other
-    # available provider if it fails (e.g. quota / 429 / auth errors).
     for provider in providers:
         try:
             llm = build_llm(provider)
@@ -218,7 +217,7 @@ async def chat(
                 if requested_mode == "auto"
                 else requested_mode
             )
-            response_text = _run_mode(llm, mode, user_message, memory)
+            response_text = _run_mode(llm, mode, user_message, db, current_user.id, conv_id)
             final_mode = mode
             used_provider = provider
             break
@@ -239,12 +238,6 @@ async def chat(
     _save_message(db, current_user.id, "user", user_message, final_mode, conv_id)
     _save_message(db, current_user.id, "assistant", response_text, final_mode, conv_id)
     conv.updated_at = datetime.now(timezone.utc)
-
-    try:
-        memory.save_context({"input": user_message}, {"output": response_text})
-    except Exception:
-        pass
-
     db.commit()
     return ChatResponse(response=response_text, mode=final_mode)
 
@@ -270,15 +263,11 @@ async def chat_stream(
     finally:
         _cdb.close()
 
-    memory = get_memory(f"{current_user.id}:{conv_id}")
-
     def sse(obj):
         return f"data: {json.dumps(obj)}\n\n"
 
     sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
-    # Pick a working provider and classify up front (non-streamed) so we can
-    # fall back cleanly before any streaming begins.
     providers = candidate_providers()
     llm = None
     chosen = None
@@ -300,17 +289,19 @@ async def chat_stream(
             continue
 
     if chosen is None:
-        # Let the frontend fall back to the non-streaming endpoint.
         raise HTTPException(status_code=503, detail=f"No LLM provider available: {last_error}")
 
     def event_stream():
         collected = []
         try:
             yield sse({"type": "meta", "mode": mode, "provider": chosen, "conversation_id": conv_id})
-            text_prompt = _build_stream_prompt(mode, user_message, memory)
+            _db = SessionLocal()
+            try:
+                text_prompt = _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
+            finally:
+                _db.close()
 
             if isinstance(text_prompt, tuple):
-                # Web mode: expand short follow-up queries using conversation context
                 _, _msg, _hist = text_prompt
                 search_query = _resolve_search_query(llm, _msg, _hist)
                 search_results = run_web_search(search_query)
@@ -328,8 +319,7 @@ async def chat_stream(
                         collected.append(piece)
                         yield sse({"type": "chunk", "text": piece})
             else:
-                # Only reached for an invalid/unsupported explicit `mode` value.
-                text = _run_mode(llm, mode, user_message, memory)
+                text = _run_mode(llm, mode, user_message, _db, current_user.id, conv_id)
                 collected.append(text)
                 yield sse({"type": "chunk", "text": text})
             yield sse({"type": "done"})
@@ -340,7 +330,7 @@ async def chat_stream(
             yield sse({"type": "error", "message": str(exc)})
 
         try:
-            _persist_exchange(current_user.id, user_message, answer, mode, memory, conv_id)
+            _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
         except Exception:
             traceback.print_exc()
         print(f"[kGPT] streamed mode={mode} provider={chosen}")
