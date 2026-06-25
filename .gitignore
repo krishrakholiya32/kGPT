@@ -21,3 +21,8 @@ temp/
 .venv/
 venv/
 env/
+
+# Local Playwright tooling (not part of the app)
+/node_modules/
+/package.json
+/package-lock.json
