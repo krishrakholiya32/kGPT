@@ -100,6 +100,7 @@ async function sendMessage() {
   input.style.height = 'auto';
 
   currentConversationHasMessages = true;
+  _saveConvSession(currentConversationId);
   appendMessage('user', message);
   lastUserMessage = message;
   await getAnswer(message);
@@ -688,17 +689,30 @@ async function loadConversations() {
     await Promise.all(empties.map(c => _deleteConversationSilent(c.id)));
     convs = convs.filter(c => (c.message_count || 0) > 0 || (c.attachment_names && c.attachment_names.length));
 
-    // Always start with a fresh empty conversation.
-    const fresh = await createConversationApi();
-    if (fresh) convs.unshift(fresh);
+    // If there's a saved conversation from a page refresh, restore it.
+    const savedId = parseInt(sessionStorage.getItem('kgpt_conv') || '0');
+    const savedConv = savedId ? convs.find(c => c.id === savedId) : null;
 
-    conversationsCache = convs;
-    renderConversations(convs);
-    currentConversationId = fresh ? fresh.id : (convs[0] ? convs[0].id : null);
-    currentConversationHasMessages = false;
-    currentConversationHasAttachment = false;
-    highlightActiveConversation();
-    document.getElementById('messages').innerHTML = emptyStateHtml();
+    if (savedConv) {
+      conversationsCache = convs;
+      renderConversations(convs);
+      currentConversationId = savedId;
+      currentConversationHasMessages = (savedConv.message_count || 0) > 0;
+      currentConversationHasAttachment = !!(savedConv.attachment_names && savedConv.attachment_names.length);
+      highlightActiveConversation();
+      await loadConversationMessages(savedId);
+    } else {
+      // Fresh start — create a new empty conversation.
+      const fresh = await createConversationApi();
+      if (fresh) convs.unshift(fresh);
+      conversationsCache = convs;
+      renderConversations(convs);
+      currentConversationId = fresh ? fresh.id : (convs[0] ? convs[0].id : null);
+      currentConversationHasMessages = false;
+      currentConversationHasAttachment = false;
+      highlightActiveConversation();
+      document.getElementById('messages').innerHTML = emptyStateHtml();
+    }
   } catch (e) {}
 }
 
@@ -761,6 +775,7 @@ async function switchConversation(id) {
   currentConversationHasMessages = false;
   const conv = conversationsCache.find(c => c.id === id);
   currentConversationHasAttachment = !!(conv && conv.attachment_names && conv.attachment_names.length);
+  _saveConvSession(id);
   highlightActiveConversation();
   await loadConversationMessages(id);
 }
@@ -809,6 +824,7 @@ async function newConversation() {
   currentConversationId = c.id;
   currentConversationHasMessages = false;
   currentConversationHasAttachment = false;
+  _saveConvSession(null);
   conversationsCache.unshift(c);
   renderConversations(conversationsCache);
   highlightActiveConversation();
@@ -905,9 +921,16 @@ function showToast(message, type = 'success') {
   setTimeout(() => toast.remove(), 3000);
 }
 
+// ===== Session conv persistence =====
+function _saveConvSession(id) {
+  if (id) sessionStorage.setItem('kgpt_conv', String(id));
+  else sessionStorage.removeItem('kgpt_conv');
+}
+
 // ===== Logout =====
 function logout() {
   localStorage.removeItem('kgpt_token');
+  sessionStorage.removeItem('kgpt_conv');
   window.location.href = '/login.html';
 }
 
@@ -959,6 +982,7 @@ async function handleFileSelect(event) {
       }
       const data = await res.json();
       currentConversationHasAttachment = true;
+      _saveConvSession(currentConversationId);
       const cached = conversationsCache.find(c => c.id === currentConversationId);
       if (cached) {
         if (!cached.attachment_names) cached.attachment_names = [];
@@ -978,4 +1002,9 @@ async function handleFileSelect(event) {
 document.addEventListener('DOMContentLoaded', () => {
   init();
   initInput();
+});
+
+// Force a fresh load if the browser restores this page from bfcache (e.g. after logout → login → back).
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) window.location.reload();
 });
