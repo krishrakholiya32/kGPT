@@ -70,11 +70,6 @@ async def get_current_user(
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
-    if not user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified. Please check your inbox.",
-        )
     return user
 
 
@@ -148,22 +143,18 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == request.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    token = secrets.token_urlsafe(32)
     new_user = User(
         username=request.username,
         email=request.email,
         password_hash=hash_password(request.password),
-        email_verified=False,
-        verification_token=token,
+        email_verified=True,
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    send_verification_email(new_user.email, new_user.username, token)
-
     access_token = create_access_token(data={"sub": new_user.username})
-    return TokenResponse(access_token=access_token, email_verified=False)
+    return TokenResponse(access_token=access_token, email_verified=True)
 
 
 @auth_router.post("/login", response_model=TokenResponse)
@@ -178,11 +169,6 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
-        )
-    if not user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email not verified. Please check your inbox.",
         )
     access_token = create_access_token(data={"sub": user.username})
     return TokenResponse(access_token=access_token)
