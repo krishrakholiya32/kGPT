@@ -196,7 +196,16 @@ async function streamAnswer(message, typingId) {
   } catch (e) {
     return false;
   }
-  if (!res.ok || !res.body) return false;
+  if (!res.ok) {
+    if (res.status === 429) {
+      const data = await res.json().catch(() => ({}));
+      removeTyping(typingId);
+      appendMessage('assistant', `⚠️ ${data.detail || 'Too many requests — please wait a moment.'}`);
+      return true; // handled — don't fall through to nonStream
+    }
+    return false;
+  }
+  if (!res.body) return false;
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

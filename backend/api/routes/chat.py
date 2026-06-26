@@ -4,8 +4,11 @@ Supports: general and web modes (auto-routed).
 """
 
 import json
+import threading
+import time
 import traceback
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import func
@@ -28,6 +31,40 @@ chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_ATTACHMENTS = 10
 _ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".pdf", ".docx"}
+
+_RPM_LIMIT = 20        # max user messages per minute
+_WEEKLY_LIMIT = 1000   # max user messages per 7 days
+_rpm_buckets: dict[int, list[float]] = defaultdict(list)
+_rpm_lock = threading.Lock()
+
+
+def _check_rate_limits(user_id: int, db: Session) -> None:
+    now = time.monotonic()
+    with _rpm_lock:
+        bucket = [t for t in _rpm_buckets[user_id] if now - t < 60]
+        if len(bucket) >= _RPM_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many messages — please wait a moment before sending again.",
+            )
+        bucket.append(now)
+        _rpm_buckets[user_id] = bucket
+
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    weekly = (
+        db.query(func.count(ChatMessage.id))
+        .filter(
+            ChatMessage.user_id == user_id,
+            ChatMessage.role == "user",
+            ChatMessage.timestamp >= week_ago,
+        )
+        .scalar()
+    ) or 0
+    if weekly >= _WEEKLY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Weekly limit of {_WEEKLY_LIMIT} messages reached. Resets after 7 days.",
+        )
 
 
 def classify_query(query: str, llm) -> str:
@@ -230,6 +267,7 @@ async def chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _check_rate_limits(current_user.id, db)
     user_message = request.message
     requested_mode = request.mode or "auto"
 
@@ -284,6 +322,12 @@ async def chat_stream(
     {"type":"meta","mode":..,"provider":..} -> {"type":"chunk","text":..} -> {"type":"done"}.
     Both general and web modes stream token-by-token.
     """
+    _rdb = SessionLocal()
+    try:
+        _check_rate_limits(current_user.id, _rdb)
+    finally:
+        _rdb.close()
+
     user_message = request.message
     requested_mode = request.mode or "auto"
 
