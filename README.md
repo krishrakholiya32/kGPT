@@ -2,13 +2,37 @@
   <h1 align="center">kGPT</h1>
   <p align="center"><strong>Your Private AI Assistant</strong></p>
   <p align="center">
-    A full-stack AI chat application with automatic web search routing, file understanding,
-    streaming responses, and per-user conversation management — built from scratch with FastAPI and vanilla JS.
+    A full-stack AI chat application with intelligent web-search routing, file understanding,
+    streaming responses, and per-user conversation management — designed and implemented from scratch with FastAPI and vanilla JS.
   </p>
   <p align="center">
-    <a href="https://kgpt.zrik.tech"><strong>Live Demo → kgpt.zrik.tech</strong></a>
+    <a href="https://kgpt.zrik.tech">
+      <img src="https://img.shields.io/badge/Live%20Demo-kgpt.zrik.tech-brightgreen?style=for-the-badge" alt="Live Demo">
+    </a>
+  </p>
+  <p align="center">
+    <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat&logo=fastapi&logoColor=white" alt="FastAPI">
+    <img src="https://img.shields.io/badge/Groq-LLM-F55036?style=flat" alt="Groq">
+    <img src="https://img.shields.io/badge/AWS-EC2-FF9900?style=flat&logo=amazonaws&logoColor=white" alt="AWS">
+    <img src="https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white" alt="Docker">
+    <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat" alt="License">
   </p>
 </p>
+
+---
+
+<!-- Add 2-3 screenshots here. Recommended: login page, chat with web search result, file upload in action.
+     Example:
+     ![kGPT Chat](docs/screenshots/chat.png)
+     ![kGPT Login](docs/screenshots/login.png)
+-->
+
+---
+
+## Why I Built This
+
+kGPT was built to explore production-ready AI application development end-to-end. The project focuses on intelligent LLM response streaming, automatic web-search routing, multi-file document understanding, secure authentication, and cloud deployment — rather than relying on pre-built chatbot frameworks. Every layer, from the SSE streaming protocol to the idempotent database migrations, was designed and implemented from scratch.
 
 ---
 
@@ -16,16 +40,29 @@
 
 | # | Feature | Description |
 |---|---------|-------------|
-| 1 | **Auto-routing** | Every message is classified by the LLM as `general` (direct answer) or `web` (live search + summarise). No mode switching needed. |
+| 1 | **Intelligent routing** | Every message is classified by the LLM as `general` (direct answer) or `web` (live search + summarise). No mode switching needed. |
 | 2 | **Streaming responses** | Token-by-token streaming over Server-Sent Events with a stop button to cancel mid-generation. |
 | 3 | **Real-time web search** | Live DuckDuckGo results fetched and summarised by the LLM when needed. |
 | 4 | **File understanding** | Attach up to 10 files per conversation (PDF, DOCX, JPG, PNG). Text extracted via PyMuPDF/python-docx; images described by a vision model. Context injected into every subsequent message. |
 | 5 | **Conversation management** | Create, switch, rename, and delete chats. Session persists across page refreshes; fresh chat on login. |
-| 6 | **Rich rendering** | Markdown, syntax-highlighted code blocks with copy buttons, LaTeX math (KaTeX). |
+| 6 | **Rich message rendering** | Markdown, syntax-highlighted code blocks with copy buttons, LaTeX math (KaTeX). |
 | 7 | **Message actions** | Copy, edit & resend, regenerate last reply. |
 | 8 | **Auth & security** | JWT + Argon2 password hashing. JWT secret validated at startup. WAL-mode SQLite. |
 | 9 | **Rate limiting** | 20 messages/min + 1000 messages/week per user — protects the upstream API. |
-| 10 | **HTTPS** | Nginx reverse proxy with Let's Encrypt certificate (auto-renewing). |
+| 10 | **HTTPS** | Nginx reverse proxy with a Let's Encrypt certificate (auto-renewing). |
+
+---
+
+## Demo
+
+<!-- Replace this section with a GIF once recorded.
+     Recommended flow: login → ask a general question → ask something that triggers web search → upload a PDF → ask about it.
+     Tools: ScreenToGif (Windows), Kap (macOS), peek (Linux).
+     Example:
+     ![kGPT Demo](docs/demo.gif)
+-->
+
+Try it live at **[kgpt.zrik.tech](https://kgpt.zrik.tech)**
 
 ---
 
@@ -83,7 +120,9 @@ Browser
 ### Prerequisites
 
 - Python 3.11+
+- Linux / macOS / Windows
 - [Groq API key](https://console.groq.com/keys) (free)
+- Docker (optional)
 
 ### 1. Clone
 
@@ -128,8 +167,8 @@ uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
 ## Docker
 
 ```bash
-docker-compose up -d --build
-docker-compose down
+docker compose up -d --build
+docker compose down
 ```
 
 ---
@@ -140,34 +179,34 @@ docker-compose down
 kgpt/
 ├── backend/
 │   ├── agent/
-│   │   ├── llm.py              # Groq LLM factory
-│   │   ├── tools.py            # DuckDuckGo web search
+│   │   ├── email.py            # Gmail SMTP verification emails
 │   │   ├── file_extractor.py   # PDF / DOCX / image text extraction
-│   │   └── email.py            # Gmail SMTP verification emails
+│   │   ├── llm.py              # Groq LLM factory
+│   │   └── tools.py            # DuckDuckGo web search
 │   ├── api/
-│   │   ├── main.py             # FastAPI app, CORS, static mount
 │   │   ├── auth.py             # JWT auth, register / login / verify
+│   │   ├── main.py             # FastAPI app, CORS, static mount
 │   │   ├── models/
-│   │   │   ├── user.py         # User SQLAlchemy model
-│   │   │   └── chat.py         # Conversation, ChatMessage, ConversationAttachment models
+│   │   │   ├── chat.py         # Conversation, ChatMessage, ConversationAttachment models
+│   │   │   └── user.py         # User SQLAlchemy model
 │   │   └── routes/
 │   │       └── chat.py         # Chat routing, SSE streaming, conversations CRUD, rate limiting
 │   └── database/
 │       └── db.py               # Engine, sessions, init_db, idempotent migrations, WAL mode
-├── frontend/
-│   ├── index.html              # Chat UI
-│   ├── login.html              # Login + register
-│   ├── verify.html             # Email verification landing
-│   ├── css/style.css
-│   └── js/chat.js              # All frontend logic — SSE, conversations, file upload
 ├── deploy/
 │   ├── kgpt.service            # systemd service
 │   ├── nginx.conf              # Nginx reverse proxy with SSE support
 │   └── setup.sh                # EC2 bootstrap script
-├── requirements.txt
-├── Dockerfile
+├── frontend/
+│   ├── css/style.css
+│   ├── index.html              # Chat UI
+│   ├── js/chat.js              # All frontend logic — SSE, conversations, file upload
+│   ├── login.html              # Login + register
+│   └── verify.html             # Email verification landing
+├── .env.example
 ├── docker-compose.yml
-└── .env.example
+├── Dockerfile
+└── requirements.txt
 ```
 
 ---
@@ -218,6 +257,16 @@ Deployed on **AWS EC2** (Ubuntu) with:
 
 ---
 
+## Roadmap
+
+- [ ] Multi-model support (OpenAI, Gemini, local Ollama)
+- [ ] RAG with vector database for document Q&A
+- [ ] Conversation sharing via public links
+- [ ] Voice input / output
+- [ ] Redis-backed rate limiting for multi-worker accuracy
+
+---
+
 ## License
 
 [MIT](LICENSE)
@@ -225,5 +274,5 @@ Deployed on **AWS EC2** (Ubuntu) with:
 ---
 
 <p align="center">
-  Built with FastAPI · LangChain · Groq · Deployed on AWS EC2
+  Designed and implemented from scratch with FastAPI · LangChain · Groq · Deployed on AWS EC2
 </p>
