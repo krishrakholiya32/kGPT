@@ -915,24 +915,22 @@ function addSystemNote(text) {
 }
 
 function showAttachmentPill(name, uploading = false) {
-  const pill = document.getElementById('attachment-pill');
-  const nameEl = document.getElementById('attachment-pill-name');
-  const removeBtn = document.getElementById('attachment-remove');
+  const pill = document.getElementById(‘attachment-pill’);
+  const nameEl = document.getElementById(‘attachment-pill-name’);
   if (!pill) return;
   if (!name) {
-    pill.style.display = 'none';
+    pill.style.display = ‘none’;
     return;
   }
   if (uploading) {
     nameEl.innerHTML = `Uploading ${escapeHtml(name)}…`;
-    pill.title = '';
+    pill.title = ‘’;
   } else {
-    nameEl.innerHTML = `${escapeHtml(name)} <span class="pill-status">· context active</span>`;
-    pill.title = 'This file’s content is included in every message in this conversation. Click × to remove it.';
+    nameEl.innerHTML = `${escapeHtml(name)} <span class="pill-status">· active for this chat</span>`;
+    pill.title = ‘File context is saved for this entire conversation and is automatically removed when you delete the chat.’;
   }
-  pill.classList.toggle('uploading', uploading);
-  if (removeBtn) removeBtn.style.display = uploading ? 'none' : '';
-  pill.style.display = 'flex';
+  pill.classList.toggle(‘uploading’, uploading);
+  pill.style.display = ‘flex’;
 }
 
 function triggerFileInput() {
