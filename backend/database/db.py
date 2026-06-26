@@ -114,9 +114,56 @@ def _migrate_attachments() -> None:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN attachment_name VARCHAR(255)"))
 
 
+def _migrate_attachment_table() -> None:
+    """Create conversation_attachments table and migrate any legacy single-attachment data. Safe to run repeatedly."""
+    from datetime import datetime, timezone
+    from sqlalchemy import text, inspect
+
+    insp = inspect(engine)
+    if "conversation_attachments" not in insp.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE conversation_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+                    filename VARCHAR(255) NOT NULL,
+                    context_text TEXT NOT NULL,
+                    uploaded_at DATETIME NOT NULL
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX idx_conv_att_cid ON conversation_attachments(conversation_id)"
+            ))
+
+    # Migrate any legacy rows (conversation.context IS NOT NULL)
+    if "conversations" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("conversations")]
+        if "context" in cols and "attachment_name" in cols:
+            now = datetime.now(timezone.utc).isoformat()
+            with engine.begin() as conn:
+                rows = conn.execute(text(
+                    "SELECT id, attachment_name, context FROM conversations "
+                    "WHERE context IS NOT NULL AND attachment_name IS NOT NULL"
+                )).fetchall()
+                for conv_id, filename, ctx in rows:
+                    exists = conn.execute(text(
+                        "SELECT 1 FROM conversation_attachments "
+                        "WHERE conversation_id=:cid AND filename=:fn LIMIT 1"
+                    ), {"cid": conv_id, "fn": filename}).fetchone()
+                    if not exists:
+                        conn.execute(text(
+                            "INSERT INTO conversation_attachments "
+                            "(conversation_id, filename, context_text, uploaded_at) "
+                            "VALUES (:cid, :fn, :ctx, :now)"
+                        ), {"cid": conv_id, "fn": filename, "ctx": ctx, "now": now})
+                    conn.execute(text(
+                        "UPDATE conversations SET context=NULL, attachment_name=NULL WHERE id=:cid"
+                    ), {"cid": conv_id})
+
+
 def init_db() -> None:
     from backend.api.models.user import User  # noqa: F401
-    from backend.api.models.chat import ChatMessage, Conversation  # noqa: F401
+    from backend.api.models.chat import ChatMessage, Conversation, ConversationAttachment  # noqa: F401
 
     db_path = DATABASE_URL.replace("sqlite:///", "")
     db_dir = os.path.dirname(db_path)
@@ -139,3 +186,8 @@ def init_db() -> None:
         _migrate_attachments()
     except Exception as exc:
         print(f"[kGPT] attachment migration skipped: {exc}")
+
+    try:
+        _migrate_attachment_table()
+    except Exception as exc:
+        print(f"[kGPT] attachment-table migration skipped: {exc}")

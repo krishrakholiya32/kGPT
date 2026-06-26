@@ -46,8 +46,8 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(200), nullable=False, default="New chat")
-    context = Column(Text, nullable=True)
-    attachment_name = Column(String(255), nullable=True)
+    context = Column(Text, nullable=True)           # legacy — superseded by conversation_attachments
+    attachment_name = Column(String(255), nullable=True)  # legacy
     created_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -57,6 +57,16 @@ class Conversation(Base):
 
     def __repr__(self):
         return f"<Conversation(id={self.id}, user_id={self.user_id}, title='{self.title}')>"
+
+
+class ConversationAttachment(Base):
+    __tablename__ = "conversation_attachments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    context_text = Column(Text, nullable=False)
+    uploaded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 # Pydantic Schemas

@@ -28,7 +28,7 @@ let abortController = null;
 let aborted = false;
 let currentConversationId = null;
 let conversationsCache = [];
-let currentAttachmentName = null;
+let currentConversationHasAttachment = false;
 let currentConversationHasMessages = false;
 let uploadInProgress = false;
 
@@ -678,10 +678,10 @@ async function loadConversations() {
     if (!res.ok) return;
     let convs = await res.json();
 
-    // Silently delete conversations with no messages AND no attachment (left over from previous sessions).
-    const empties = convs.filter(c => (c.message_count || 0) === 0 && !c.attachment_name);
+    // Silently delete conversations with no messages AND no attachments (left over from previous sessions).
+    const empties = convs.filter(c => (c.message_count || 0) === 0 && !(c.attachment_names && c.attachment_names.length));
     await Promise.all(empties.map(c => _deleteConversationSilent(c.id)));
-    convs = convs.filter(c => (c.message_count || 0) > 0 || c.attachment_name);
+    convs = convs.filter(c => (c.message_count || 0) > 0 || (c.attachment_names && c.attachment_names.length));
 
     // Always start with a fresh empty conversation.
     const fresh = await createConversationApi();
@@ -691,7 +691,7 @@ async function loadConversations() {
     renderConversations(convs);
     currentConversationId = fresh ? fresh.id : (convs[0] ? convs[0].id : null);
     currentConversationHasMessages = false;
-    currentAttachmentName = null;
+    currentConversationHasAttachment = false;
     highlightActiveConversation();
     document.getElementById('messages').innerHTML = emptyStateHtml();
   } catch (e) {}
@@ -746,17 +746,17 @@ async function switchConversation(id) {
   if (id === currentConversationId) return;
   if (isLoading) stopGenerating();
 
-  // Drop the current conversation if it never got any messages and has no attachment.
-  if (currentConversationId && !currentConversationHasMessages && !currentAttachmentName) {
+  // Drop the current conversation if it never got any messages and has no attachments.
+  if (currentConversationId && !currentConversationHasMessages && !currentConversationHasAttachment) {
     await _deleteConversationSilent(currentConversationId);
     conversationsCache = conversationsCache.filter(c => c.id !== currentConversationId);
   }
 
   currentConversationId = id;
   currentConversationHasMessages = false;
-  highlightActiveConversation();
   const conv = conversationsCache.find(c => c.id === id);
-  currentAttachmentName = conv ? (conv.attachment_name || null) : null;
+  currentConversationHasAttachment = !!(conv && conv.attachment_names && conv.attachment_names.length);
+  highlightActiveConversation();
   await loadConversationMessages(id);
 }
 
@@ -769,10 +769,11 @@ async function loadConversationMessages(id) {
     container.innerHTML = '';
     currentConversationHasMessages = msgs.length > 0;
 
-    // If this conversation has an attachment, show a note so the user knows context is active.
+    // If this conversation has attachments, show a note so the user knows context is active.
     const conv = conversationsCache.find(c => c.id === id);
-    if (conv && conv.attachment_name) {
-      addSystemNote(`📎 ${conv.attachment_name} · context active for this conversation`);
+    if (conv && conv.attachment_names && conv.attachment_names.length) {
+      const label = conv.attachment_names.join(', ');
+      addSystemNote(`📎 ${label} · context active for this conversation`);
     }
 
     if (!msgs.length) { container.innerHTML += emptyStateHtml(); return; }
@@ -792,8 +793,8 @@ async function createConversationApi() {
 }
 
 async function newConversation() {
-  // Drop the current conversation only if it has no messages and no attachment.
-  if (currentConversationId && !currentConversationHasMessages && !currentAttachmentName) {
+  // Drop the current conversation only if it has no messages and no attachments.
+  if (currentConversationId && !currentConversationHasMessages && !currentConversationHasAttachment) {
     await _deleteConversationSilent(currentConversationId);
     conversationsCache = conversationsCache.filter(c => c.id !== currentConversationId);
   }
@@ -802,7 +803,7 @@ async function newConversation() {
   if (!c) { showToast('Could not create chat', 'error'); return; }
   currentConversationId = c.id;
   currentConversationHasMessages = false;
-  currentAttachmentName = null;
+  currentConversationHasAttachment = false;
   conversationsCache.unshift(c);
   renderConversations(conversationsCache);
   highlightActiveConversation();
@@ -950,10 +951,14 @@ async function handleFileSelect(event) {
       return;
     }
     const data = await res.json();
-    currentAttachmentName = data.attachment_name;
+    const fname = data.filename;
+    currentConversationHasAttachment = true;
     const cached = conversationsCache.find(c => c.id === currentConversationId);
-    if (cached) cached.attachment_name = data.attachment_name;
-    addSystemNote(`📎 ${data.attachment_name} attached — ask me anything about it. Context stays active for this entire conversation.`);
+    if (cached) {
+      if (!cached.attachment_names) cached.attachment_names = [];
+      cached.attachment_names.push(fname);
+    }
+    addSystemNote(`📎 ${fname} attached — ask me anything about it. Context stays active for this entire conversation.`);
   } catch (e) {
     showToast('Upload failed', 'error');
   } finally {
@@ -961,20 +966,6 @@ async function handleFileSelect(event) {
   }
 }
 
-async function removeAttachment() {
-  if (!currentConversationId) return;
-  try {
-    const res = await fetch(`${API}/api/chat/conversations/${currentConversationId}/attachment`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
-    if (!res.ok) { showToast('Remove failed', 'error'); return; }
-  } catch (e) { showToast('Remove failed', 'error'); return; }
-  currentAttachmentName = null;
-  const cached = conversationsCache.find(c => c.id === currentConversationId);
-  if (cached) cached.attachment_name = null;
-  showToast('Attachment removed', 'success');
-}
 
 // ===== Run =====
 document.addEventListener('DOMContentLoaded', () => {

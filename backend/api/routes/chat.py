@@ -19,13 +19,14 @@ from langchain_core.output_parsers import StrOutputParser
 from backend.agent.llm import build_llm, candidate_providers
 from backend.agent.tools import run_web_search
 from backend.api.auth import get_current_user
-from backend.api.models.chat import ChatMessage, ChatRequest, ChatResponse, Conversation
+from backend.api.models.chat import ChatMessage, ChatRequest, ChatResponse, Conversation, ConversationAttachment
 from backend.api.models.user import User
 from backend.database.db import get_db, SessionLocal
 
 chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_ATTACHMENTS = 10
 _ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".pdf", ".docx"}
 
 
@@ -125,7 +126,17 @@ def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
 
 
 def _file_context_preamble(db, conv_id: int) -> str:
-    """Return a formatted preamble with the conversation's attached file context, or ''."""
+    """Return a formatted preamble with all attached file contexts for this conversation, or ''."""
+    atts = (
+        db.query(ConversationAttachment)
+        .filter(ConversationAttachment.conversation_id == conv_id)
+        .order_by(ConversationAttachment.uploaded_at.asc())
+        .all()
+    )
+    if atts:
+        parts = [f"[Attached file: {a.filename}]\n{a.context_text}" for a in atts]
+        return "\n\n".join(parts) + "\n\n"
+    # Legacy fallback for old single-attachment rows
     conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
     if conv and conv.context:
         name = conv.attachment_name or "attached file"
@@ -431,17 +442,32 @@ async def upload_attachment(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large. Max 10 MB.")
 
+    existing_count = (
+        db.query(func.count(ConversationAttachment.id))
+        .filter(ConversationAttachment.conversation_id == conv_id)
+        .scalar()
+    ) or 0
+    if existing_count >= MAX_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {MAX_ATTACHMENTS} files per conversation.",
+        )
+
     try:
         from backend.agent.file_extractor import extract_text
         context = extract_text(data, file.filename)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not extract file content: {exc}")
 
-    conv.context = context
-    conv.attachment_name = file.filename
+    att = ConversationAttachment(
+        conversation_id=conv_id,
+        filename=file.filename,
+        context_text=context,
+    )
+    db.add(att)
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return {"attachment_name": file.filename}
+    return {"filename": file.filename, "count": existing_count + 1}
 
 
 @chat_router.delete("/conversations/{conv_id}/attachment")
@@ -477,15 +503,34 @@ async def list_conversations(
     )
     conv_ids = [c.id for c in convs]
     count_map: dict[int, int] = {}
+    att_map: dict[int, list] = {}
     if conv_ids:
-        rows = (
+        msg_rows = (
             db.query(ChatMessage.conversation_id, func.count(ChatMessage.id))
             .filter(ChatMessage.conversation_id.in_(conv_ids))
             .group_by(ChatMessage.conversation_id)
             .all()
         )
-        count_map = {cid: cnt for cid, cnt in rows}
-    return [{**_conv_dict(c), "message_count": count_map.get(c.id, 0)} for c in convs]
+        count_map = {cid: cnt for cid, cnt in msg_rows}
+        att_rows = (
+            db.query(ConversationAttachment.conversation_id, ConversationAttachment.filename)
+            .filter(ConversationAttachment.conversation_id.in_(conv_ids))
+            .order_by(ConversationAttachment.uploaded_at.asc())
+            .all()
+        )
+        for cid, fname in att_rows:
+            att_map.setdefault(cid, []).append(fname)
+    result = []
+    for c in convs:
+        names = att_map.get(c.id, [])
+        if not names and c.attachment_name:
+            names = [c.attachment_name]
+        result.append({
+            **_conv_dict(c),
+            "message_count": count_map.get(c.id, 0),
+            "attachment_names": names,
+        })
+    return result
 
 
 @chat_router.post("/conversations")

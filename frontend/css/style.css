@@ -524,14 +524,24 @@ html, body { height: 100vh; overflow: hidden; }
 /* ===== File attachment ===== */
 .attach-btn {
   width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0;
-  background: var(--surface2); border: 1px solid var(--border);
-  color: var(--text-muted); cursor: pointer;
+  background-color: var(--surface2) !important; border: 1px solid var(--border);
+  cursor: pointer; padding: 0;
   display: flex; align-items: center; justify-content: center;
-  transition: background 0.15s, color 0.15s;
+  transition: background-color 0.15s;
   -webkit-appearance: none; appearance: none;
+  box-shadow: none; outline: none;
 }
-.attach-btn svg { display: block; }
-.attach-btn:hover { background: var(--border); color: var(--text); }
+.attach-btn::before {
+  content: '';
+  display: block; width: 18px; height: 18px;
+  background-color: var(--text-muted);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48'/%3E%3C/svg%3E") no-repeat center / contain;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48'/%3E%3C/svg%3E") no-repeat center / contain;
+  transition: background-color 0.15s;
+  flex-shrink: 0;
+}
+.attach-btn:hover { background-color: var(--border) !important; }
+.attach-btn:hover::before { background-color: var(--text); }
 
 /* System notes (file attached, etc.) */
 .system-note {
