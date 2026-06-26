@@ -20,6 +20,13 @@ engine = create_engine(
     echo=False,
 )
 
+if "sqlite" in DATABASE_URL:
+    from sqlalchemy import event as _sa_event
+
+    @_sa_event.listens_for(engine, "connect")
+    def _set_wal_mode(conn, _rec):
+        conn.execute("PRAGMA journal_mode=WAL")
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
