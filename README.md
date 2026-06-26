@@ -68,12 +68,7 @@ kGPT was built to explore production-ready AI application development end-to-end
 
 ## Demo
 
-<!-- Replace this section with a GIF once recorded.
-     Recommended flow: login → ask a general question → ask something that triggers web search → upload a PDF → ask about it.
-     Tools: ScreenToGif (Windows), Kap (macOS), peek (Linux).
-     Example:
-     ![kGPT Demo](docs/demo.gif)
--->
+![kGPT Demo](docs/demo.gif)
 
 Try it live at **[kgpt.zrik.tech](https://kgpt.zrik.tech)**
 
