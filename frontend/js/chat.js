@@ -678,10 +678,10 @@ async function loadConversations() {
     if (!res.ok) return;
     let convs = await res.json();
 
-    // Silently delete any conversations that have no messages (left over from previous sessions).
-    const empties = convs.filter(c => (c.message_count || 0) === 0);
+    // Silently delete conversations with no messages AND no attachment (left over from previous sessions).
+    const empties = convs.filter(c => (c.message_count || 0) === 0 && !c.attachment_name);
     await Promise.all(empties.map(c => _deleteConversationSilent(c.id)));
-    convs = convs.filter(c => (c.message_count || 0) > 0);
+    convs = convs.filter(c => (c.message_count || 0) > 0 || c.attachment_name);
 
     // Always start with a fresh empty conversation.
     const fresh = await createConversationApi();
@@ -692,7 +692,6 @@ async function loadConversations() {
     currentConversationId = fresh ? fresh.id : (convs[0] ? convs[0].id : null);
     currentConversationHasMessages = false;
     currentAttachmentName = null;
-    showAttachmentPill(null);
     highlightActiveConversation();
     document.getElementById('messages').innerHTML = emptyStateHtml();
   } catch (e) {}
@@ -747,8 +746,8 @@ async function switchConversation(id) {
   if (id === currentConversationId) return;
   if (isLoading) stopGenerating();
 
-  // Drop the current conversation if it never got any messages.
-  if (currentConversationId && !currentConversationHasMessages) {
+  // Drop the current conversation if it never got any messages and has no attachment.
+  if (currentConversationId && !currentConversationHasMessages && !currentAttachmentName) {
     await _deleteConversationSilent(currentConversationId);
     conversationsCache = conversationsCache.filter(c => c.id !== currentConversationId);
   }
@@ -758,7 +757,6 @@ async function switchConversation(id) {
   highlightActiveConversation();
   const conv = conversationsCache.find(c => c.id === id);
   currentAttachmentName = conv ? (conv.attachment_name || null) : null;
-  showAttachmentPill(currentAttachmentName);
   await loadConversationMessages(id);
 }
 
@@ -770,7 +768,14 @@ async function loadConversationMessages(id) {
     const msgs = await res.json();
     container.innerHTML = '';
     currentConversationHasMessages = msgs.length > 0;
-    if (!msgs.length) { container.innerHTML = emptyStateHtml(); return; }
+
+    // If this conversation has an attachment, show a note so the user knows context is active.
+    const conv = conversationsCache.find(c => c.id === id);
+    if (conv && conv.attachment_name) {
+      addSystemNote(`📎 ${conv.attachment_name} · context active for this conversation`);
+    }
+
+    if (!msgs.length) { container.innerHTML += emptyStateHtml(); return; }
     msgs.forEach(m => appendMessage(m.role, m.content, m.mode || null));
   } catch (e) {
     container.innerHTML = emptyStateHtml();
@@ -787,8 +792,8 @@ async function createConversationApi() {
 }
 
 async function newConversation() {
-  // Drop the current conversation if it never got any messages.
-  if (currentConversationId && !currentConversationHasMessages) {
+  // Drop the current conversation only if it has no messages and no attachment.
+  if (currentConversationId && !currentConversationHasMessages && !currentAttachmentName) {
     await _deleteConversationSilent(currentConversationId);
     conversationsCache = conversationsCache.filter(c => c.id !== currentConversationId);
   }
@@ -798,7 +803,6 @@ async function newConversation() {
   currentConversationId = c.id;
   currentConversationHasMessages = false;
   currentAttachmentName = null;
-  showAttachmentPill(null);
   conversationsCache.unshift(c);
   renderConversations(conversationsCache);
   highlightActiveConversation();
@@ -903,6 +907,7 @@ function logout() {
 
 // ===== File Attachment =====
 function addSystemNote(text) {
+
   const container = document.getElementById('messages');
   if (!container) return;
   const empty = container.querySelector('.empty-state');
@@ -914,24 +919,6 @@ function addSystemNote(text) {
   scrollChat();
 }
 
-function showAttachmentPill(name, uploading = false) {
-  const pill = document.getElementById(‘attachment-pill’);
-  const nameEl = document.getElementById(‘attachment-pill-name’);
-  if (!pill) return;
-  if (!name) {
-    pill.style.display = ‘none’;
-    return;
-  }
-  if (uploading) {
-    nameEl.innerHTML = `Uploading ${escapeHtml(name)}…`;
-    pill.title = ‘’;
-  } else {
-    nameEl.innerHTML = `${escapeHtml(name)} <span class="pill-status">· active for this chat</span>`;
-    pill.title = ‘File context is saved for this entire conversation and is automatically removed when you delete the chat.’;
-  }
-  pill.classList.toggle(‘uploading’, uploading);
-  pill.style.display = ‘flex’;
-}
 
 function triggerFileInput() {
   if (!currentConversationId) {
@@ -948,7 +935,6 @@ async function handleFileSelect(event) {
   event.target.value = '';
 
   uploadInProgress = true;
-  showAttachmentPill(file.name, true);
 
   try {
     const formData = new FormData();
@@ -960,18 +946,15 @@ async function handleFileSelect(event) {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      showAttachmentPill(null);
       showToast(data.detail || 'Upload failed', 'error');
       return;
     }
     const data = await res.json();
     currentAttachmentName = data.attachment_name;
-    showAttachmentPill(data.attachment_name, false);
     const cached = conversationsCache.find(c => c.id === currentConversationId);
     if (cached) cached.attachment_name = data.attachment_name;
-    addSystemNote(`📎 ${data.attachment_name} attached — I can now answer questions about it for this entire conversation. (Remove with ×)`);
+    addSystemNote(`📎 ${data.attachment_name} attached — ask me anything about it. Context stays active for this entire conversation.`);
   } catch (e) {
-    showAttachmentPill(null);
     showToast('Upload failed', 'error');
   } finally {
     uploadInProgress = false;
@@ -990,7 +973,6 @@ async function removeAttachment() {
   currentAttachmentName = null;
   const cached = conversationsCache.find(c => c.id === currentConversationId);
   if (cached) cached.attachment_name = null;
-  showAttachmentPill(null);
   showToast('Attachment removed', 'success');
 }
 
