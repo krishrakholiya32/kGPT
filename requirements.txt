@@ -32,3 +32,8 @@ ddgs
 
 # ===== Email =====
 # (uses stdlib smtplib — no extra package needed)
+
+# ===== File attachment extraction =====
+pymupdf
+python-docx
+groq

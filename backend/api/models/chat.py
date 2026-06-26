@@ -46,6 +46,8 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(200), nullable=False, default="New chat")
+    context = Column(Text, nullable=True)
+    attachment_name = Column(String(255), nullable=True)
     created_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )

@@ -99,6 +99,21 @@ def _migrate_users() -> None:
             ))
 
 
+def _migrate_attachments() -> None:
+    """Add context and attachment_name columns to conversations table. Safe to run repeatedly."""
+    from sqlalchemy import text, inspect
+
+    insp = inspect(engine)
+    if "conversations" not in insp.get_table_names():
+        return
+    cols = [c["name"] for c in insp.get_columns("conversations")]
+    with engine.begin() as conn:
+        if "context" not in cols:
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN context TEXT"))
+        if "attachment_name" not in cols:
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN attachment_name VARCHAR(255)"))
+
+
 def init_db() -> None:
     from backend.api.models.user import User  # noqa: F401
     from backend.api.models.chat import ChatMessage, Conversation  # noqa: F401
@@ -119,3 +134,8 @@ def init_db() -> None:
         _migrate_users()
     except Exception as exc:
         print(f"[kGPT] user migration skipped: {exc}")
+
+    try:
+        _migrate_attachments()
+    except Exception as exc:
+        print(f"[kGPT] attachment migration skipped: {exc}")
