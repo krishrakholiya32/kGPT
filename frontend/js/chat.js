@@ -30,6 +30,7 @@ let currentConversationId = null;
 let conversationsCache = [];
 let currentAttachmentName = null;
 let currentConversationHasMessages = false;
+let uploadInProgress = false;
 
 // ===== Init =====
 async function init() {
@@ -90,6 +91,7 @@ function useHint(text) {
 // ===== Send Message =====
 async function sendMessage() {
   if (isLoading) { stopGenerating(); return; }
+  if (uploadInProgress) { showToast('Please wait — file is still uploading', 'warning'); return; }
   const input = document.getElementById('chat-input');
   const message = input.value.trim();
   if (!message) return;
@@ -900,6 +902,18 @@ function logout() {
 }
 
 // ===== File Attachment =====
+function addSystemNote(text) {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  const empty = container.querySelector('.empty-state');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'system-note';
+  div.textContent = text;
+  container.appendChild(div);
+  scrollChat();
+}
+
 function showAttachmentPill(name, uploading = false) {
   const pill = document.getElementById('attachment-pill');
   const nameEl = document.getElementById('attachment-pill-name');
@@ -909,7 +923,13 @@ function showAttachmentPill(name, uploading = false) {
     pill.style.display = 'none';
     return;
   }
-  nameEl.textContent = uploading ? `Uploading ${name}…` : name;
+  if (uploading) {
+    nameEl.innerHTML = `Uploading ${escapeHtml(name)}…`;
+    pill.title = '';
+  } else {
+    nameEl.innerHTML = `${escapeHtml(name)} <span class="pill-status">· context active</span>`;
+    pill.title = 'This file’s content is included in every message in this conversation. Click × to remove it.';
+  }
   pill.classList.toggle('uploading', uploading);
   if (removeBtn) removeBtn.style.display = uploading ? 'none' : '';
   pill.style.display = 'flex';
@@ -929,6 +949,7 @@ async function handleFileSelect(event) {
   if (!file) return;
   event.target.value = '';
 
+  uploadInProgress = true;
   showAttachmentPill(file.name, true);
 
   try {
@@ -950,10 +971,12 @@ async function handleFileSelect(event) {
     showAttachmentPill(data.attachment_name, false);
     const cached = conversationsCache.find(c => c.id === currentConversationId);
     if (cached) cached.attachment_name = data.attachment_name;
-    showToast('File attached — context is now active for this conversation', 'success');
+    addSystemNote(`📎 ${data.attachment_name} attached — I can now answer questions about it for this entire conversation. (Remove with ×)`);
   } catch (e) {
     showAttachmentPill(null);
     showToast('Upload failed', 'error');
+  } finally {
+    uploadInProgress = false;
   }
 }
 
