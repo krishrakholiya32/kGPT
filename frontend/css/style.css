@@ -84,7 +84,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 
 /* ===== Auth Pages ===== */
 .auth-page {
-  min-height: 100vh; display: flex; align-items: center;
+  min-height: 100vh; display: flex; align-items: flex-start;
   justify-content: center; padding: 20px;
   background: radial-gradient(ellipse at 50% 0%, rgba(108,99,255,0.15) 0%, transparent 60%), var(--bg);
 }
@@ -92,7 +92,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .auth-card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 40px; width: 100%; max-width: 420px;
-  box-shadow: var(--shadow); max-height: calc(100vh - 40px); overflow-y: auto;
+  box-shadow: var(--shadow); margin: auto 0;
 }
 
 .auth-logo {
