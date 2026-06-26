@@ -6,8 +6,11 @@ Supports: general and web modes (auto-routed).
 import json
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Body
+from sqlalchemy import func
+
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from langchain_core.prompts import ChatPromptTemplate
@@ -21,6 +24,9 @@ from backend.api.models.user import User
 from backend.database.db import get_db, SessionLocal
 
 chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+_ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".pdf", ".docx"}
 
 
 def classify_query(query: str, llm) -> str:
@@ -118,6 +124,15 @@ def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
     return lines
 
 
+def _file_context_preamble(db, conv_id: int) -> str:
+    """Return a formatted preamble with the conversation's attached file context, or ''."""
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if conv and conv.context:
+        name = conv.attachment_name or "attached file"
+        return f"[Attached file: {name}]\n{conv.context}\n\n"
+    return ""
+
+
 def _resolve_search_query(llm, user_message, history_text):
     """If the message is a short follow-up, expand it into a self-contained search query."""
     if not history_text or len(user_message.split()) > 6:
@@ -136,22 +151,24 @@ def _resolve_search_query(llm, user_message, history_text):
 def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM and return the response text."""
     history_text = _history_text_from_db(db, user_id, conv_id)
+    ctx = _file_context_preamble(db, conv_id)
 
     if mode == "general":
-        prompt = (
-            f"Previous conversation:\n{history_text}\nUser: {user_message}\nAssistant:"
-            if history_text
-            else f"User: {user_message}\nAssistant:"
-        )
-        result = llm.invoke(prompt)
+        parts = []
+        if ctx:
+            parts.append(ctx)
+        if history_text:
+            parts.append(f"Previous conversation:\n{history_text}")
+        parts.append(f"User: {user_message}\nAssistant:")
+        result = llm.invoke("\n".join(parts))
         return result.content if hasattr(result, "content") else str(result)
 
     if mode == "web":
         search_query = _resolve_search_query(llm, user_message, history_text)
         search_results = run_web_search(search_query)
         summary_prompt = (
-            f"Previous conversation:\n{history_text}\n" if history_text else ""
-        ) + (
+            (ctx if ctx else "") +
+            (f"Previous conversation:\n{history_text}\n" if history_text else "") +
             f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
             f"Search Results:\n{search_results}\n\nAnswer:"
         )
@@ -164,15 +181,18 @@ def _run_mode(llm, mode, user_message, db, user_id, conv_id):
 def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     """Return a text prompt for the given mode (general or web), else None."""
     history_text = _history_text_from_db(db, user_id, conv_id)
+    ctx = _file_context_preamble(db, conv_id)
 
     if mode == "general":
-        return (
-            f"Previous conversation:\n{history_text}\nUser: {user_message}\nAssistant:"
-            if history_text
-            else f"User: {user_message}\nAssistant:"
-        )
+        parts = []
+        if ctx:
+            parts.append(ctx)
+        if history_text:
+            parts.append(f"Previous conversation:\n{history_text}")
+        parts.append(f"User: {user_message}\nAssistant:")
+        return "\n".join(parts)
     if mode == "web":
-        return ("__web__", user_message, history_text)
+        return ("__web__", user_message, history_text, ctx)
     return None
 
 
@@ -305,12 +325,12 @@ async def chat_stream(
                 _db.close()
 
             if isinstance(text_prompt, tuple):
-                _, _msg, _hist = text_prompt
+                _, _msg, _hist, _ctx = text_prompt
                 search_query = _resolve_search_query(llm, _msg, _hist)
                 search_results = run_web_search(search_query)
                 text_prompt = (
-                    f"Previous conversation:\n{_hist}\n" if _hist else ""
-                ) + (
+                    (_ctx if _ctx else "") +
+                    (f"Previous conversation:\n{_hist}\n" if _hist else "") +
                     f"Based on the following web search results, answer the user's question: '{_msg}'\n\n"
                     f"Search Results:\n{search_results}\n\nAnswer:"
                 )
@@ -384,7 +404,64 @@ def _conv_dict(c):
         "id": c.id,
         "title": c.title,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "attachment_name": c.attachment_name,
     }
+
+
+@chat_router.post("/conversations/{conv_id}/attachment")
+async def upload_attachment(
+    conv_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
+        .first()
+    )
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _ALLOWED_EXTS:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Allowed: jpg, png, pdf, docx.")
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large. Max 10 MB.")
+
+    try:
+        from backend.agent.file_extractor import extract_text
+        context = extract_text(data, file.filename)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not extract file content: {exc}")
+
+    conv.context = context
+    conv.attachment_name = file.filename
+    conv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"attachment_name": file.filename}
+
+
+@chat_router.delete("/conversations/{conv_id}/attachment")
+async def delete_attachment(
+    conv_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
+        .first()
+    )
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv.context = None
+    conv.attachment_name = None
+    conv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "removed"}
 
 
 @chat_router.get("/conversations")
@@ -398,7 +475,17 @@ async def list_conversations(
         .order_by(Conversation.updated_at.desc())
         .all()
     )
-    return [_conv_dict(c) for c in convs]
+    conv_ids = [c.id for c in convs]
+    count_map: dict[int, int] = {}
+    if conv_ids:
+        rows = (
+            db.query(ChatMessage.conversation_id, func.count(ChatMessage.id))
+            .filter(ChatMessage.conversation_id.in_(conv_ids))
+            .group_by(ChatMessage.conversation_id)
+            .all()
+        )
+        count_map = {cid: cnt for cid, cnt in rows}
+    return [{**_conv_dict(c), "message_count": count_map.get(c.id, 0)} for c in convs]
 
 
 @chat_router.post("/conversations")
@@ -410,7 +497,7 @@ async def create_conversation(
     db.add(conv)
     db.commit()
     db.refresh(conv)
-    return _conv_dict(conv)
+    return {**_conv_dict(conv), "message_count": 0}
 
 
 @chat_router.get("/conversations/{conv_id}/messages")

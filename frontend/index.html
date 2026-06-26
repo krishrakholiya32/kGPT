@@ -80,7 +80,13 @@
     <!-- Input -->
     <div class="chat-input-area">
       <div class="input-container-centered">
+        <div class="attachment-pill" id="attachment-pill" style="display:none">
+          <span class="attachment-pill-icon">📎</span>
+          <span id="attachment-pill-name"></span>
+          <button class="attachment-remove" id="attachment-remove" onclick="removeAttachment()" title="Remove attachment">×</button>
+        </div>
         <div class="input-row">
+          <button class="attach-btn" id="attach-btn" onclick="triggerFileInput()" title="Attach file (jpg, png, pdf, docx)">📎</button>
           <div class="input-wrapper">
             <textarea
               id="chat-input"
@@ -92,6 +98,7 @@
         </div>
       </div>
     </div>
+    <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.pdf,.docx" style="display:none" onchange="handleFileSelect(event)">
 
   </main>
 </div>
@@ -99,7 +106,7 @@
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="/js/chat.js?v=7"></script>
+<script src="/js/chat.js?v=8"></script>
 
 </body>
 </html>

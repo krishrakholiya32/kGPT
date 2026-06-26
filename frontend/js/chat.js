@@ -27,6 +27,9 @@ let lastUserMessage = null;
 let abortController = null;
 let aborted = false;
 let currentConversationId = null;
+let conversationsCache = [];
+let currentAttachmentName = null;
+let currentConversationHasMessages = false;
 
 // ===== Init =====
 async function init() {
@@ -94,6 +97,7 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
 
+  currentConversationHasMessages = true;
   appendMessage('user', message);
   lastUserMessage = message;
   await getAnswer(message);
@@ -671,16 +675,24 @@ async function loadConversations() {
     const res = await fetch(`${API}/api/chat/conversations`, { headers: authHeaders() });
     if (!res.ok) return;
     let convs = await res.json();
-    if (!convs.length) {
-      const c = await createConversationApi();
-      convs = c ? [c] : [];
-    }
+
+    // Silently delete any conversations that have no messages (left over from previous sessions).
+    const empties = convs.filter(c => (c.message_count || 0) === 0);
+    await Promise.all(empties.map(c => _deleteConversationSilent(c.id)));
+    convs = convs.filter(c => (c.message_count || 0) > 0);
+
+    // Always start with a fresh empty conversation.
+    const fresh = await createConversationApi();
+    if (fresh) convs.unshift(fresh);
+
+    conversationsCache = convs;
     renderConversations(convs);
-    if (!currentConversationId || !convs.find(c => c.id === currentConversationId)) {
-      currentConversationId = convs[0] ? convs[0].id : null;
-    }
+    currentConversationId = fresh ? fresh.id : (convs[0] ? convs[0].id : null);
+    currentConversationHasMessages = false;
+    currentAttachmentName = null;
+    showAttachmentPill(null);
     highlightActiveConversation();
-    if (currentConversationId) await loadConversationMessages(currentConversationId);
+    document.getElementById('messages').innerHTML = emptyStateHtml();
   } catch (e) {}
 }
 
@@ -688,7 +700,8 @@ async function refreshConversationList() {
   try {
     const res = await fetch(`${API}/api/chat/conversations`, { headers: authHeaders() });
     if (!res.ok) return;
-    renderConversations(await res.json());
+    conversationsCache = await res.json();
+    renderConversations(conversationsCache);
     highlightActiveConversation();
   } catch (e) {}
 }
@@ -729,9 +742,21 @@ function highlightActiveConversation() {
 }
 
 async function switchConversation(id) {
+  if (id === currentConversationId) return;
   if (isLoading) stopGenerating();
+
+  // Drop the current conversation if it never got any messages.
+  if (currentConversationId && !currentConversationHasMessages) {
+    await _deleteConversationSilent(currentConversationId);
+    conversationsCache = conversationsCache.filter(c => c.id !== currentConversationId);
+  }
+
   currentConversationId = id;
+  currentConversationHasMessages = false;
   highlightActiveConversation();
+  const conv = conversationsCache.find(c => c.id === id);
+  currentAttachmentName = conv ? (conv.attachment_name || null) : null;
+  showAttachmentPill(currentAttachmentName);
   await loadConversationMessages(id);
 }
 
@@ -739,13 +764,15 @@ async function loadConversationMessages(id) {
   const container = document.getElementById('messages');
   try {
     const res = await fetch(`${API}/api/chat/conversations/${id}/messages`, { headers: authHeaders() });
-    if (!res.ok) { container.innerHTML = emptyStateHtml(); return; }
+    if (!res.ok) { container.innerHTML = emptyStateHtml(); currentConversationHasMessages = false; return; }
     const msgs = await res.json();
     container.innerHTML = '';
+    currentConversationHasMessages = msgs.length > 0;
     if (!msgs.length) { container.innerHTML = emptyStateHtml(); return; }
     msgs.forEach(m => appendMessage(m.role, m.content, m.mode || null));
   } catch (e) {
     container.innerHTML = emptyStateHtml();
+    currentConversationHasMessages = false;
   }
 }
 
@@ -758,13 +785,30 @@ async function createConversationApi() {
 }
 
 async function newConversation() {
+  // Drop the current conversation if it never got any messages.
+  if (currentConversationId && !currentConversationHasMessages) {
+    await _deleteConversationSilent(currentConversationId);
+    conversationsCache = conversationsCache.filter(c => c.id !== currentConversationId);
+  }
+
   const c = await createConversationApi();
   if (!c) { showToast('Could not create chat', 'error'); return; }
   currentConversationId = c.id;
+  currentConversationHasMessages = false;
+  currentAttachmentName = null;
+  showAttachmentPill(null);
+  conversationsCache.unshift(c);
+  renderConversations(conversationsCache);
+  highlightActiveConversation();
   document.getElementById('messages').innerHTML = emptyStateHtml();
-  await refreshConversationList();
   const input = document.getElementById('chat-input');
   if (input) input.focus();
+}
+
+async function _deleteConversationSilent(id) {
+  try {
+    await fetch(`${API}/api/chat/conversations/${id}`, { method: 'DELETE', headers: authHeaders() });
+  } catch (e) {}
 }
 
 async function deleteConversation(id) {
@@ -853,6 +897,80 @@ function showToast(message, type = 'success') {
 function logout() {
   localStorage.removeItem('kgpt_token');
   window.location.href = '/login.html';
+}
+
+// ===== File Attachment =====
+function showAttachmentPill(name, uploading = false) {
+  const pill = document.getElementById('attachment-pill');
+  const nameEl = document.getElementById('attachment-pill-name');
+  const removeBtn = document.getElementById('attachment-remove');
+  if (!pill) return;
+  if (!name) {
+    pill.style.display = 'none';
+    return;
+  }
+  nameEl.textContent = uploading ? `Uploading ${name}…` : name;
+  pill.classList.toggle('uploading', uploading);
+  if (removeBtn) removeBtn.style.display = uploading ? 'none' : '';
+  pill.style.display = 'flex';
+}
+
+function triggerFileInput() {
+  if (!currentConversationId) {
+    showToast('Start a conversation first', 'warning');
+    return;
+  }
+  const fi = document.getElementById('file-input');
+  if (fi) fi.click();
+}
+
+async function handleFileSelect(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = '';
+
+  showAttachmentPill(file.name, true);
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API}/api/chat/conversations/${currentConversationId}/attachment`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token()}` },
+      body: formData,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showAttachmentPill(null);
+      showToast(data.detail || 'Upload failed', 'error');
+      return;
+    }
+    const data = await res.json();
+    currentAttachmentName = data.attachment_name;
+    showAttachmentPill(data.attachment_name, false);
+    const cached = conversationsCache.find(c => c.id === currentConversationId);
+    if (cached) cached.attachment_name = data.attachment_name;
+    showToast('File attached — context is now active for this conversation', 'success');
+  } catch (e) {
+    showAttachmentPill(null);
+    showToast('Upload failed', 'error');
+  }
+}
+
+async function removeAttachment() {
+  if (!currentConversationId) return;
+  try {
+    const res = await fetch(`${API}/api/chat/conversations/${currentConversationId}/attachment`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok) { showToast('Remove failed', 'error'); return; }
+  } catch (e) { showToast('Remove failed', 'error'); return; }
+  currentAttachmentName = null;
+  const cached = conversationsCache.find(c => c.id === currentConversationId);
+  if (cached) cached.attachment_name = null;
+  showAttachmentPill(null);
+  showToast('Attachment removed', 'success');
 }
 
 // ===== Run =====
