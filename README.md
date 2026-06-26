@@ -22,11 +22,24 @@
 
 ---
 
-<!-- Add 2-3 screenshots here. Recommended: login page, chat with web search result, file upload in action.
-     Example:
-     ![kGPT Chat](docs/screenshots/chat.png)
-     ![kGPT Login](docs/screenshots/login.png)
--->
+<table>
+  <tr>
+    <td><img src="docs/screenshots/1-login.png" alt="Login page" width="100%"></td>
+    <td><img src="docs/screenshots/2-home.png" alt="Home — suggestion cards" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Clean login & register</em></td>
+    <td align="center"><em>Home with suggestion cards</em></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/3-web-search.png" alt="Web search result" width="100%"></td>
+    <td><img src="docs/screenshots/4-code.png" alt="Code rendering" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Intelligent web search — auto-routed</em></td>
+    <td align="center"><em>Syntax-highlighted code rendering</em></td>
+  </tr>
+</table>
 
 ---
 
