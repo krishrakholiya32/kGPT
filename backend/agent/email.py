@@ -1,25 +1,26 @@
 """
-Email utility for kGPT — sends transactional emails via Resend.
+Email utility for kGPT — sends transactional emails via Gmail SMTP.
+Requires SMTP_USER (Gmail address) and SMTP_PASSWORD (Gmail App Password).
 """
 import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from dotenv import load_dotenv
 
 
 def send_verification_email(to_email: str, username: str, token: str) -> bool:
     load_dotenv(override=True)
-    api_key = os.getenv("RESEND_API_KEY", "")
-    if not api_key:
-        print("[kGPT] RESEND_API_KEY not set — skipping verification email")
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    if not smtp_user or not smtp_password:
+        print("[kGPT] SMTP_USER or SMTP_PASSWORD not set — skipping verification email")
         return False
 
-    import resend  # imported here so missing package only errors when actually used
-
     base_url = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
-    from_email = os.getenv("RESEND_FROM_EMAIL", "onboarding@resend.dev")
+    from_name = os.getenv("SMTP_FROM_NAME", "kGPT")
     verify_url = f"{base_url}/verify.html?token={token}"
-
-    resend.api_key = api_key
 
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:40px 24px">
@@ -44,13 +45,18 @@ def send_verification_email(to_email: str, username: str, token: str) -> bool:
     </div>
     """
 
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Verify your kGPT email address"
+    msg["From"] = f"{from_name} <{smtp_user}>"
+    msg["To"] = to_email
+    msg.attach(MIMEText(html, "html"))
+
     try:
-        resend.Emails.send({
-            "from": f"kGPT <{from_email}>",
-            "to": [to_email],
-            "subject": "Verify your kGPT email address",
-            "html": html,
-        })
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, [to_email], msg.as_string())
         return True
     except Exception as exc:
         print(f"[kGPT] Failed to send verification email: {exc}")
