@@ -25,4 +25,4 @@ env/
 # Local Playwright tooling (not part of the app)
 /node_modules/
 /package.json
-/package-lock.json
+/package-lock.jsonCLAUDE.md
