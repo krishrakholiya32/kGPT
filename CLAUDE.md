@@ -1,14 +1,15 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project overview
 
-kGPT is a full-stack AI assistant: a FastAPI backend (LangChain-based chat with auto-routing
-between general LLM answers and live web search) and a vanilla HTML/CSS/JS frontend served as
-static files by FastAPI itself (same origin, no separate build step).
+kGPT is a full-stack AI assistant: a FastAPI backend with LangChain-based chat (auto-routing between
+general LLM answers and live web search), file attachment support, and a vanilla HTML/CSS/JS frontend
+served as static files by FastAPI itself (same origin, no separate build step).
 
-Live at **https://k-gpt.duckdns.org** (AWS EC2, Nginx + Let's Encrypt).
+Live at **https://kgpt.zrik.tech** (AWS EC2, Nginx + Let's Encrypt).
+Old domain **https://k-gpt.duckdns.org** also active.
 
 ## Commands
 
@@ -16,7 +17,7 @@ Live at **https://k-gpt.duckdns.org** (AWS EC2, Nginx + Let's Encrypt).
 # Setup
 python -m venv .venv && .venv\Scripts\activate   # Windows
 pip install -r requirements.txt
-cp .env.example .env   # then set GROQ_API_KEY, JWT_SECRET_KEY, RESEND_API_KEY, APP_BASE_URL
+cp .env.example .env   # then set GROQ_API_KEY, JWT_SECRET_KEY, GMAIL_USER, GMAIL_APP_PASSWORD, APP_BASE_URL
 
 # Run (auto-reload)
 uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
@@ -28,9 +29,7 @@ docker-compose down
 
 - App UI: `http://localhost:8000/` (redirects to `login.html`)
 - Swagger docs: `http://localhost:8000/docs`
-- Health check: `http://localhost:8000/api/health` (reports active mode + provider)
-
-There is no test suite and no linter configuration in this repo.
+- Health check: `http://localhost:8000/api/health`
 
 ## Architecture
 
@@ -38,102 +37,65 @@ There is no test suite and no linter configuration in this repo.
 
 `backend/api/routes/chat.py` is the core of the app. Every chat message goes through:
 
-1. **Conversation resolution** (`_resolve_conversation`) — finds or creates a `Conversation` row.
-2. **Provider selection** (`candidate_providers()` from `backend/agent/llm.py`) — Groq only;
-   returns an empty list if `GROQ_API_KEY` is not set.
-3. **Routing/classification** (`classify_query`) — if `mode == "auto"`, an LLM call classifies
-   the message into `general` or `web`. General means a direct LLM answer; web means DuckDuckGo
-   results are fetched first and prepended to the prompt.
-4. **Mode execution** (`_run_mode` for non-streaming, `_build_stream_prompt` for streaming):
-   both modes stream token-by-token via `llm.stream(...)`.
-5. **Persistence** — `/api/chat` saves messages inline. `/api/chat/stream` saves the **user
-   message immediately** after building the prompt (before any streaming begins), so "continue"
-   after an aborted stream always finds the right context. The assistant reply is saved in the
-   generator's `finally` block once streaming finishes (or is interrupted).
+1. **Rate limiting** (`_check_rate_limits`) — 20 req/min (in-memory bucket) + 1000/week (DB count).
+2. **Conversation resolution** (`_resolve_conversation`) — finds or creates a `Conversation` row.
+3. **File context** (`_file_context_preamble`) — queries `conversation_attachments`, concatenates all
+   extracted text into a preamble injected before the user message.
+4. **Provider selection** (`candidate_providers()`) — Groq only.
+5. **Routing** (`classify_query`) — if `mode == "auto"`, LLM classifies as `general` or `web`.
+6. **Mode execution** — both modes stream token-by-token via `llm.stream(...)`.
+7. **Persistence** — user message saved before streaming; assistant reply saved in `finally` block.
 
-SSE message shape for `/api/chat/stream`: `{"type":"meta",...}` → one or more
-`{"type":"chunk","text":...}` → `{"type":"done"}` (or `{"type":"error",...}`).
+SSE shape: `{"type":"meta",...}` → `{"type":"chunk","text":...}` → `{"type":"done"}`.
+
+### File attachments
+
+- New uploads go to `conversation_attachments` table (id, conversation_id, filename, context_text, uploaded_at).
+- Max 10 files per conversation, max 10 MB each.
+- Supported: `.jpg`, `.jpeg`, `.png`, `.pdf`, `.docx`.
+- Extraction: PDF via PyMuPDF, DOCX via python-docx, images via Groq vision (`llama-4-scout-17b-16e-instruct`).
+- Legacy single-attachment columns (`context`, `attachment_name`) on `Conversation` still read as fallback.
+
+### Rate limiting
+
+- Per-minute: in-memory `defaultdict(list)` per `user_id`, pruned each request. Shared across threads via `threading.Lock`. Not shared across workers (2 workers → effective limit ~40/min, acceptable for low traffic).
+- Weekly: DB query counting `role='user'` messages in last 7 days.
 
 ### History loading (`_history_text_from_db`)
 
-Conversation history is loaded directly from the DB (not in-memory LangChain memory), filtered
-by `user_id` and `conversation_id`, ordered by `timestamp DESC`, limited to the last 10
-exchanges (20 rows). This survives server restarts and works across multiple workers.
+Loaded from DB (not in-memory), filtered by `user_id` + `conversation_id`, last 10 exchanges (20 rows).
 
-### LLM provider abstraction (`backend/agent/llm.py`)
+### Frontend session persistence
 
-- Groq only (`langchain_groq.ChatGroq`). `candidate_providers()` returns `["groq"]` if
-  `GROQ_API_KEY` is set, otherwise `[]`.
-- `_env()` calls `load_dotenv(override=True)` on **every** invocation so editing `.env` takes
-  effect on the next request without restarting.
+- `sessionStorage` stores the active `conversation_id`.
+- On page load: if saved conv exists in the list → restore it. Otherwise create a fresh empty conv.
+- On logout: `sessionStorage` cleared → next login always starts fresh.
+- `pageshow` listener forces reload on bfcache restore.
 
-### Web search tool (`backend/agent/tools.py`)
+### Database (`backend/database/db.py`)
 
-- `run_web_search(query)` calls `ddgs`/`duckduckgo_search` directly. Used only for the `web`
-  chat mode.
-
-### Email (`backend/agent/email.py`)
-
-- `send_verification_email(to_email, username, token)` uses the Resend SDK.
-- Silently skips if `RESEND_API_KEY` is not set (useful for local dev without email).
-
-### Database (`backend/database/db.py`, `backend/api/models/`)
-
-- SQLAlchemy + SQLite (`DATABASE_URL`, default `sqlite:///./database/data.db`).
-- `init_db()` runs `Base.metadata.create_all` then two idempotent hand-written migrations:
-  - `_migrate_conversations()` — adds `chat_messages.conversation_id`, buckets orphaned messages.
-  - `_migrate_users()` — adds `email_verified` (DEFAULT 1 for existing users) and
-    `verification_token` columns.
-- No Alembic — schema changes need a similar hand-written, repeat-safe migration added to `init_db`.
-- Models: `User` (`backend/api/models/user.py`); `ChatMessage`, `Conversation`
-  (`backend/api/models/chat.py`).
+- SQLite + WAL mode (via `PRAGMA journal_mode=WAL` on connect).
+- `init_db()` runs `Base.metadata.create_all` then idempotent hand-written migrations:
+  - `_migrate_conversations()` — adds `conversation_id` to `chat_messages`.
+  - `_migrate_users()` — adds `email_verified`, `verification_token`.
+  - `_migrate_attachments()` — adds legacy `context`, `attachment_name` columns to `conversations`.
+  - `_migrate_attachment_table()` — creates `conversation_attachments` table; migrates any legacy rows.
 
 ### Auth (`backend/api/auth.py`)
 
-- JWT (PyJWT) + Argon2 password hashing (pwdlib).
-- **Login uses email** (not username) as the identifier — the OAuth2 `username` field carries
-  the email value.
-- Registration sets `email_verified=False` and sends a verification email via Resend.
-  Unverified users get a 403 on login and cannot access any protected route.
-- Endpoints: `register`, `login`, `verify-email`, `resend-verification`, `check` (availability),
-  `me`.
-- `get_current_user` blocks unverified users with HTTP 403.
-
-### Frontend
-
-- `frontend/` is plain HTML/CSS/JS, no build step. `backend/api/main.py` mounts it with
-  `StaticFiles(..., html=True)` at `/` — **this mount must stay registered last** so it doesn't
-  shadow `/api/*` routes.
-- `frontend/login.html` — login (email field) + register + "check your inbox" pending screen.
-- `frontend/verify.html` — reads `?token=` from URL, calls `POST /api/auth/verify-email`,
-  stores JWT, redirects to `index.html`.
-- `frontend/index.html` + `frontend/js/chat.js` — full chat UI with conversations sidebar,
-  SSE streaming, markdown/code/math rendering, copy (HTTP-safe fallback), regenerate, PDF export.
-
-## Environment variables
-
-Config is read via `os.getenv` scattered across modules — see `.env.example` for the full list.
-The most relevant:
-
-- `GROQ_API_KEY` — required for the LLM to work.
-- `JWT_SECRET_KEY` — must be set to something real; generate with
-  `python -c "import secrets; print(secrets.token_hex(32))"`.
-- `RESEND_API_KEY` + `RESEND_FROM_EMAIL` — for email verification. Leave blank to skip.
-- `APP_BASE_URL` — full public URL used in verification email links (e.g.
-  `https://k-gpt.duckdns.org`).
-- `DATABASE_URL` — defaults to `sqlite:///./database/data.db`.
+- JWT startup guard: exits immediately if `JWT_SECRET_KEY` is the default value.
+- Registration sets `email_verified=True` directly (no email gate in practice).
+- Email: Gmail SMTP via `backend/agent/email.py`.
 
 ## Deployment (AWS EC2)
 
-- Ubuntu 26.04, Python 3.13 (from deadsnakes PPA — Ubuntu 26.04 ships Python 3.14 which is
-  incompatible with LangChain).
-- Systemd service: `deploy/kgpt.service` (app at `/home/ubuntu/kgpt`).
-- Nginx reverse proxy: `/etc/nginx/sites-enabled/kgpt` with SSE buffering disabled and HTTPS.
-- Let's Encrypt cert for `k-gpt.duckdns.org` via Certbot (auto-renews).
-- SSH key: `kgpt-key.pem` (stored locally in Downloads).
+- Ubuntu, Python 3.13 (deadsnakes PPA).
+- Venv at `/home/ubuntu/kgpt/.venv/` — pip installs go there.
+- Systemd service: `deploy/kgpt.service`.
+- Nginx: `deploy/nginx.conf` — SSE buffering disabled, `client_max_body_size 10M`, `proxy_read_timeout 120s`.
+- Let's Encrypt for `kgpt.zrik.tech` and `k-gpt.duckdns.org` via Certbot.
 
 ## Dependency note
 
-`requirements.txt` deliberately pins `langchain<1.0` / `langchain-core<1.0` because
-`langchain.memory.ConversationBufferWindowMemory` (used in `backend/agent/memory.py`) was
-removed in LangChain 1.0. Don't bump these without migrating away from that class first.
+`requirements.txt` pins `langchain<1.0` / `langchain-core<1.0` because `langchain.memory` was removed
+in LangChain 1.0. Don't bump without migrating first.
