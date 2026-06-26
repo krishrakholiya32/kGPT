@@ -483,6 +483,9 @@ async def delete_attachment(
     )
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    db.query(ConversationAttachment).filter(
+        ConversationAttachment.conversation_id == conv_id
+    ).delete()
     conv.context = None
     conv.attachment_name = None
     conv.updated_at = datetime.now(timezone.utc)
@@ -542,7 +545,7 @@ async def create_conversation(
     db.add(conv)
     db.commit()
     db.refresh(conv)
-    return {**_conv_dict(conv), "message_count": 0}
+    return {**_conv_dict(conv), "message_count": 0, "attachment_names": []}
 
 
 @chat_router.get("/conversations/{conv_id}/messages")
@@ -589,13 +592,12 @@ async def delete_conversation(
     )
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    db.query(ConversationAttachment).filter(
+        ConversationAttachment.conversation_id == conv_id
+    ).delete()
     db.query(ChatMessage).filter(ChatMessage.conversation_id == conv_id).delete()
     db.delete(conv)
     db.commit()
-    try:
-        clear_memory(f"{current_user.id}:{conv_id}")
-    except Exception:
-        pass
     return {"status": "deleted"}
 
 

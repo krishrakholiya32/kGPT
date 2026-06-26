@@ -32,6 +32,11 @@ JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "change-me-in-production")
 JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
+if JWT_SECRET_KEY == "change-me-in-production":
+    import sys
+    print("FATAL: JWT_SECRET_KEY is not set. Set it in .env before starting.", file=sys.stderr)
+    sys.exit(1)
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
