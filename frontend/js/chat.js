@@ -667,6 +667,11 @@ function emptyStateHtml() {
           <div class="suggestion-title">General Chat</div>
           <div class="suggestion-text">"Explain how neural networks work"</div>
         </div>
+        <div class="suggestion-card" onclick="triggerFileInput()">
+          <div class="suggestion-icon">\uD83D\uDCCE</div>
+          <div class="suggestion-title">Documents</div>
+          <div class="suggestion-text">Attach PDF, DOCX, or images</div>
+        </div>
       </div>
     </div>
   `;
@@ -931,39 +936,41 @@ function triggerFileInput() {
 }
 
 async function handleFileSelect(event) {
-  const file = event.target.files[0];
-  if (!file) return;
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
   event.target.value = '';
 
   uploadInProgress = true;
 
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
-    const res = await fetch(`${API}/api/chat/conversations/${currentConversationId}/attachment`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token()}` },
-      body: formData,
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      showToast(data.detail || 'Upload failed', 'error');
-      return;
+  for (const file of files) {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${API}/api/chat/conversations/${currentConversationId}/attachment`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token()}` },
+        body: formData,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(`${file.name}: ${data.detail || 'Upload failed'}`, 'error');
+        if (res.status === 400) break; // hit the 10-file limit
+        continue;
+      }
+      const data = await res.json();
+      currentConversationHasAttachment = true;
+      const cached = conversationsCache.find(c => c.id === currentConversationId);
+      if (cached) {
+        if (!cached.attachment_names) cached.attachment_names = [];
+        cached.attachment_names.push(data.filename);
+      }
+      addSystemNote(`📎 ${data.filename} attached — ask me anything about it. Context stays active for this entire conversation.`);
+    } catch (e) {
+      showToast(`${file.name}: upload failed`, 'error');
     }
-    const data = await res.json();
-    const fname = data.filename;
-    currentConversationHasAttachment = true;
-    const cached = conversationsCache.find(c => c.id === currentConversationId);
-    if (cached) {
-      if (!cached.attachment_names) cached.attachment_names = [];
-      cached.attachment_names.push(fname);
-    }
-    addSystemNote(`📎 ${fname} attached — ask me anything about it. Context stays active for this entire conversation.`);
-  } catch (e) {
-    showToast('Upload failed', 'error');
-  } finally {
-    uploadInProgress = false;
   }
+
+  uploadInProgress = false;
 }
 
 
