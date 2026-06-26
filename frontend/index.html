@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>kGPT — Your Private AI Assistant</title>
-  <link rel="stylesheet" href="/css/style.css?v=12">
+  <link rel="stylesheet" href="/css/style.css?v=13">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
@@ -72,6 +72,11 @@
               <div class="suggestion-title">General Chat</div>
               <div class="suggestion-text">"Explain how neural networks work"</div>
             </div>
+            <div class="suggestion-card" onclick="triggerFileInput()">
+              <div class="suggestion-icon">📎</div>
+              <div class="suggestion-title">Documents</div>
+              <div class="suggestion-text">Attach PDF, DOCX, or images</div>
+            </div>
           </div>
         </div>
       </div>
@@ -93,7 +98,7 @@
         </div>
       </div>
     </div>
-    <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.pdf,.docx" style="display:none" onchange="handleFileSelect(event)">
+    <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.pdf,.docx" multiple style="display:none" onchange="handleFileSelect(event)">
 
   </main>
 </div>
@@ -101,7 +106,7 @@
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="/js/chat.js?v=12"></script>
+<script src="/js/chat.js?v=13"></script>
 
 </body>
 </html>

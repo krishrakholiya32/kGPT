@@ -337,7 +337,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 /* ===== Suggestions Grid ===== */
 .suggestions-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   width: 100%;
   max-width: 760px;
@@ -374,7 +374,12 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   color: var(--text-muted);
 }
 
-@media (max-width: 600px) {
+@media (max-width: 800px) {
+  .suggestions-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 500px) {
   .suggestions-grid {
     grid-template-columns: 1fr;
   }
