@@ -31,4 +31,4 @@ pydantic[email]
 ddgs
 
 # ===== Email =====
-resend
+# (uses stdlib smtplib — no extra package needed)
