@@ -76,11 +76,21 @@
         <span class="field-hint" id="hint-email"></span>
       </div>
       <div class="form-group">
+        <label>Confirm Email</label>
+        <input type="email" id="reg-email-confirm" placeholder="Re-enter your email" autocomplete="email">
+        <span class="field-hint" id="hint-email-confirm"></span>
+      </div>
+      <div class="form-group">
         <label>Password</label>
         <input type="password" id="reg-password" placeholder="Choose a password" autocomplete="new-password">
         <p style="font-size:12px;color:var(--text-muted);margin-top:6px">
           At least 8 characters, including an uppercase letter, a lowercase letter, a number, and a special character.
         </p>
+      </div>
+      <div class="form-group">
+        <label>Confirm Password</label>
+        <input type="password" id="reg-password-confirm" placeholder="Re-enter your password" autocomplete="new-password">
+        <span class="field-hint" id="hint-password-confirm"></span>
       </div>
       <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:8px" onclick="register()">
         Create Account →
@@ -189,8 +199,12 @@
   async function register() {
     const username = document.getElementById('reg-username').value.trim();
     const email = document.getElementById('reg-email').value.trim();
+    const emailConfirm = document.getElementById('reg-email-confirm').value.trim();
     const password = document.getElementById('reg-password').value;
-    if (!username || !email || !password) return showError('Please fill in all fields.');
+    const passwordConfirm = document.getElementById('reg-password-confirm').value;
+    if (!username || !email || !emailConfirm || !password || !passwordConfirm) return showError('Please fill in all fields.');
+    if (email !== emailConfirm) return showError('Email addresses do not match.');
+    if (password !== passwordConfirm) return showError('Passwords do not match.');
 
     try {
       const res = await fetch(`${API}/api/auth/register`, {
@@ -286,6 +300,24 @@
 
   document.getElementById('reg-username').addEventListener('input', e => checkUsername(e.target.value));
   document.getElementById('reg-email').addEventListener('input', e => checkEmail(e.target.value));
+
+  document.getElementById('reg-email-confirm').addEventListener('input', e => {
+    const email = document.getElementById('reg-email').value.trim();
+    const val = e.target.value.trim();
+    if (!val) { setHint('hint-email-confirm', '', ''); return; }
+    val === email
+      ? setHint('hint-email-confirm', 'ok', 'Emails match ✓')
+      : setHint('hint-email-confirm', 'error', 'Emails do not match');
+  });
+
+  document.getElementById('reg-password-confirm').addEventListener('input', e => {
+    const pw = document.getElementById('reg-password').value;
+    const val = e.target.value;
+    if (!val) { setHint('hint-password-confirm', '', ''); return; }
+    val === pw
+      ? setHint('hint-password-confirm', 'ok', 'Passwords match ✓')
+      : setHint('hint-password-confirm', 'error', 'Passwords do not match');
+  });
 
   // Enter key support
   document.addEventListener('keydown', e => {
