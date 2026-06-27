@@ -88,6 +88,16 @@ function useHint(text) {
   document.getElementById('chat-input').focus();
 }
 
+// ===== Mobile Sidebar =====
+function toggleSidebar() {
+  document.querySelector('.sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar() {
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
 // ===== Send Message =====
 async function sendMessage() {
   if (isLoading) { stopGenerating(); return; }
@@ -759,7 +769,7 @@ function renderConversations(convs) {
 
     item.appendChild(title);
     item.appendChild(del);
-    item.addEventListener('click', () => switchConversation(c.id));
+    item.addEventListener('click', () => { switchConversation(c.id); closeSidebar(); });
     list.appendChild(item);
   });
   highlightActiveConversation();
