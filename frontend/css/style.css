@@ -413,6 +413,9 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   ::-webkit-scrollbar { display: none; }
   * { scrollbar-width: none; }
 
+  /* pad input area above iPhone home bar / notch */
+  .chat-input-area { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+
   /* hide desktop-only controls */
   .collapse-sidebar-btn { display: none; }
   .expand-sidebar-btn { display: none !important; }
