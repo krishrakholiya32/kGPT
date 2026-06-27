@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>kGPT — Your Private AI Assistant</title>
-  <link rel="stylesheet" href="/css/style.css?v=13">
+  <link rel="stylesheet" href="/css/style.css?v=14">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
@@ -15,6 +15,7 @@
 </head>
 <body>
 
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
 <div class="app-layout">
 
   <!-- ===== SIDEBAR ===== -->
@@ -44,6 +45,7 @@
     <!-- Chat Header -->
     <div class="chat-header">
       <div class="chat-header-left">
+        <button class="mobile-menu-btn" id="mobile-menu-btn" onclick="toggleSidebar()" title="Menu">☰</button>
         <h2>kGPT</h2>
       </div>
       <div class="chat-header-actions">
@@ -106,7 +108,7 @@
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="/js/chat.js?v=15"></script>
+<script src="/js/chat.js?v=16"></script>
 
 </body>
 </html>
