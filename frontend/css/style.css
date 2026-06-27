@@ -329,30 +329,32 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
 /* ===== Sidebar collapse (desktop) ===== */
-.collapse-sidebar-btn {
-  width: 100%; margin-top: 8px; padding: 7px;
+.sidebar-top-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+}
+.sidebar-top-bar .new-chat-btn { margin-bottom: 0; flex: 1; }
+
+.sidebar-collapse-btn {
+  width: 34px; height: 34px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
   background: transparent; border: 1px solid var(--border);
   border-radius: var(--radius-sm); color: var(--text-muted);
-  font-size: 12px; cursor: pointer; transition: all 0.15s; font-family: inherit;
+  cursor: pointer; transition: all 0.15s;
 }
-.collapse-sidebar-btn:hover { background: var(--surface2); color: var(--text); }
+.sidebar-collapse-btn:hover { background: var(--surface2); color: var(--text); }
 
 .expand-sidebar-btn {
   display: none;
-  width: 28px; height: 28px; border-radius: var(--radius-sm);
-  background: var(--surface2); border: 1px solid var(--border);
-  color: var(--text); font-size: 18px; cursor: pointer;
-  align-items: center; justify-content: center; flex-shrink: 0;
-  line-height: 1; padding: 0;
+  width: 34px; height: 34px; border-radius: var(--radius-sm);
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer; transition: all 0.15s;
+  align-items: center; justify-content: center; flex-shrink: 0; padding: 0;
 }
+.expand-sidebar-btn:hover { background: var(--surface2); color: var(--text); }
 
 /* Collapsed sidebar state */
-.app-layout.sidebar-collapsed {
-  grid-template-columns: 0 1fr;
-}
-.app-layout.sidebar-collapsed .sidebar {
-  width: 0; overflow: hidden; padding: 0; border: none;
-}
+.app-layout.sidebar-collapsed { grid-template-columns: 0 1fr; }
+.app-layout.sidebar-collapsed .sidebar { width: 0; overflow: hidden; padding: 0; border: none; }
 
 /* ===== Mobile menu button (hidden on desktop) ===== */
 .mobile-menu-btn {
@@ -417,7 +419,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
   .chat-input-area { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 
   /* hide desktop-only controls */
-  .collapse-sidebar-btn { display: none; }
+  .sidebar-collapse-btn { display: none; }
   .expand-sidebar-btn { display: none !important; }
 }
 
