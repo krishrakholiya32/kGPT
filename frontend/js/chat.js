@@ -118,14 +118,28 @@ function closeSidebar() {
 
 // ===== Fix viewport height on mobile (keyboard gap + browser chrome) =====
 function _setAppHeight() {
-  const h = (window.visualViewport ? window.visualViewport.height : window.innerHeight) + 'px';
-  document.documentElement.style.setProperty('--app-h', h);
-  // Re-pin messages to bottom when keyboard opens/closes so input bar stays visible
-  requestAnimationFrame(() => {
-    const c = document.querySelector('.chat-messages-container');
-    if (c) c.scrollTop = c.scrollHeight;
-  });
+  const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const hpx = h + 'px';
+
+  // Set CSS variable (for CSS fallback)
+  document.documentElement.style.setProperty('--app-h', hpx);
+
+  // Set directly on elements — CSS var alone is unreliable on iOS Safari
+  document.documentElement.style.height = hpx;
+  document.body.style.height = hpx;
+  const layout = document.querySelector('.app-layout');
+  if (layout) layout.style.height = hpx;
+
+  // Force scroll to top so iOS doesn't show a gap from page scrolling
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+
+  // Re-pin messages to bottom
+  const c = document.querySelector('.chat-messages-container');
+  if (c) c.scrollTop = c.scrollHeight;
 }
+
 _setAppHeight();
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', _setAppHeight);
@@ -141,6 +155,8 @@ document.addEventListener('DOMContentLoaded', () => {
     inp.addEventListener('focus', () => {
       requestAnimationFrame(() => {
         window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
         const c = document.querySelector('.chat-messages-container');
         if (c) c.scrollTop = c.scrollHeight;
       });
