@@ -102,6 +102,11 @@ function closeSidebar() {
 function _setAppHeight() {
   const h = (window.visualViewport ? window.visualViewport.height : window.innerHeight) + 'px';
   document.documentElement.style.setProperty('--app-h', h);
+  // Re-pin messages to bottom when keyboard opens/closes so input bar stays visible
+  requestAnimationFrame(() => {
+    const c = document.querySelector('.chat-messages-container');
+    if (c) c.scrollTop = c.scrollHeight;
+  });
 }
 _setAppHeight();
 if (window.visualViewport) {
@@ -110,6 +115,20 @@ if (window.visualViewport) {
 } else {
   window.addEventListener('resize', _setAppHeight);
 }
+
+// On iOS, prevent page scroll jump when tapping input after keyboard dismiss
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('chat-input');
+  if (inp) {
+    inp.addEventListener('focus', () => {
+      requestAnimationFrame(() => {
+        window.scrollTo(0, 0);
+        const c = document.querySelector('.chat-messages-container');
+        if (c) c.scrollTop = c.scrollHeight;
+      });
+    });
+  }
+});
 
 // ===== Send Message =====
 async function sendMessage() {
