@@ -98,6 +98,19 @@ function closeSidebar() {
   document.getElementById('sidebar-overlay').classList.remove('open');
 }
 
+// ===== Fix viewport height on mobile (keyboard gap + browser chrome) =====
+function _setAppHeight() {
+  const h = (window.visualViewport ? window.visualViewport.height : window.innerHeight) + 'px';
+  document.documentElement.style.setProperty('--app-h', h);
+}
+_setAppHeight();
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', _setAppHeight);
+  window.visualViewport.addEventListener('scroll', _setAppHeight);
+} else {
+  window.addEventListener('resize', _setAppHeight);
+}
+
 // ===== Send Message =====
 async function sendMessage() {
   if (isLoading) { stopGenerating(); return; }
