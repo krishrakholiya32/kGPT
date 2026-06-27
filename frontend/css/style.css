@@ -328,6 +328,32 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .toast.warning { border-color: var(--warning); }
 @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
+/* ===== Sidebar collapse (desktop) ===== */
+.collapse-sidebar-btn {
+  width: 100%; margin-top: 8px; padding: 7px;
+  background: transparent; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-muted);
+  font-size: 12px; cursor: pointer; transition: all 0.15s; font-family: inherit;
+}
+.collapse-sidebar-btn:hover { background: var(--surface2); color: var(--text); }
+
+.expand-sidebar-btn {
+  display: none;
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); font-size: 18px; cursor: pointer;
+  align-items: center; justify-content: center; flex-shrink: 0;
+  line-height: 1; padding: 0;
+}
+
+/* Collapsed sidebar state */
+.app-layout.sidebar-collapsed {
+  grid-template-columns: 0 1fr;
+}
+.app-layout.sidebar-collapsed .sidebar {
+  width: 0; overflow: hidden; padding: 0; border: none;
+}
+
 /* ===== Mobile menu button (hidden on desktop) ===== */
 .mobile-menu-btn {
   display: none;
@@ -382,6 +408,14 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 
   /* prevent zoom on input focus on iOS */
   input, textarea, select { font-size: 16px !important; }
+
+  /* hide scrollbars on mobile — they cause the whitish side bars and eat layout space */
+  ::-webkit-scrollbar { display: none; }
+  * { scrollbar-width: none; }
+
+  /* hide desktop-only controls */
+  .collapse-sidebar-btn { display: none; }
+  .expand-sidebar-btn { display: none !important; }
 }
 
 /* ===== Suggestions Grid ===== */
