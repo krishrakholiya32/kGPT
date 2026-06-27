@@ -88,6 +88,24 @@ function useHint(text) {
   document.getElementById('chat-input').focus();
 }
 
+// ===== Desktop Sidebar Collapse =====
+function toggleDesktopSidebar() {
+  const layout = document.querySelector('.app-layout');
+  const expandBtn = document.getElementById('expand-sidebar-btn');
+  const collapsed = layout.classList.toggle('sidebar-collapsed');
+  expandBtn.style.display = collapsed ? 'flex' : 'none';
+  localStorage.setItem('kgpt_sidebar_collapsed', collapsed ? '1' : '');
+}
+
+function _restoreDesktopSidebar() {
+  if (localStorage.getItem('kgpt_sidebar_collapsed') === '1') {
+    document.querySelector('.app-layout').classList.add('sidebar-collapsed');
+    const btn = document.getElementById('expand-sidebar-btn');
+    if (btn) btn.style.display = 'flex';
+  }
+}
+_restoreDesktopSidebar();
+
 // ===== Mobile Sidebar =====
 function toggleSidebar() {
   document.querySelector('.sidebar').classList.toggle('open');
