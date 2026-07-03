@@ -1,19 +1,18 @@
 """
-LLM Factory for kGPT — multi-key rotation, Groq primary + Gemini fallback.
+LLM Factory for kGPT — multi-key rotation, Gemini primary + Groq fallback.
 
-Rewritten to call the Groq and Gemini HTTP APIs directly with ``httpx`` instead
-of going through LangChain. The public shape the rest of the app depends on is
-preserved:
+Calls the Groq and Gemini HTTP APIs directly with ``httpx`` instead of going
+through LangChain. Public shape the rest of the app depends on:
 
 - ``candidate_providers()`` returns the ordered provider list
-  (all Groq keys first, then all Gemini keys) exactly as before.
+  (all Gemini keys first, then all Groq keys).
 - ``build_llm(provider)`` returns an object with:
     * ``await client.ainvoke(prompt, system=None)`` -> full text (non-streaming)
     * ``async for piece in client.astream(prompt, system=None)`` -> text chunks
 - ``get_llm()`` returns the first provider's client.
 
 Config is re-read from ``.env`` on every call so key changes take effect without
-a restart (same behaviour as before).
+a restart.
 """
 
 import json
@@ -33,7 +32,10 @@ def _env() -> dict:
     load_dotenv(override=True)
     return {
         "temperature":   float(os.getenv("LLM_TEMPERATURE", "0.7")),
-        "groq_model":    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        # llama-3.3-70b-versatile is deprecating (Groq's June 17 2026
+        # announcement) — gpt-oss-120b is Groq's recommended, currently
+        # production-ready replacement.
+        "groq_model":    os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
         "gemini_model":  os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
     }
 
@@ -63,14 +65,14 @@ def _all_gemini_keys() -> list[str]:
 
 
 def candidate_providers() -> list[str]:
-    """Return ordered list: all Groq keys first, then all Gemini keys."""
+    """Return ordered list: all Gemini keys first, then all Groq keys."""
     providers: list[str] = []
-    for i, k in enumerate(_all_groq_keys()):
-        if k:
-            providers.append(f"groq:{i}")
     for i, k in enumerate(_all_gemini_keys()):
         if k:
             providers.append(f"gemini:{i}")
+    for i, k in enumerate(_all_groq_keys()):
+        if k:
+            providers.append(f"groq:{i}")
     return providers
 
 

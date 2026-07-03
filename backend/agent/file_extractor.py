@@ -1,12 +1,20 @@
 """
 File text extractor for kGPT attachments.
-Supports: PDF (pymupdf), DOCX (python-docx), JPEG/PNG (Groq vision).
+Supports: PDF (pymupdf), DOCX (python-docx), JPEG/PNG (Gemini vision primary,
+Groq vision fallback — same provider order as the main chat LLM).
 """
 import base64
 import os
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
+
+IMAGE_DESCRIBE_PROMPT = (
+    "Describe everything visible in this image in full detail — "
+    "including all text, numbers, labels, charts, diagrams, or visual content. "
+    "Be thorough and precise."
+)
 
 MAX_CONTEXT_CHARS = 12_000  # ~3k tokens, keeps prompts manageable
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf", ".docx"}
@@ -40,24 +48,47 @@ def _extract_docx(data: bytes) -> str:
 
 def _extract_image(data: bytes, ext: str) -> str:
     load_dotenv(override=True)
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY not set — cannot describe image content.")
-    from groq import Groq
     mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
     b64 = base64.b64encode(data).decode()
-    client = Groq(api_key=api_key)
+
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    if gemini_key:
+        try:
+            return _gemini_vision(b64, mime, gemini_key)
+        except Exception as exc:
+            print(f"[kGPT] Gemini vision failed, falling back to Groq: {exc}")
+
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY is set — cannot describe image content.")
+    return _groq_vision(b64, mime, groq_key)
+
+
+def _gemini_vision(b64: str, mime: str, key: str) -> str:
+    model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    payload = {
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": mime, "data": b64}},
+            {"text": IMAGE_DESCRIBE_PROMPT},
+        ]}]
+    }
+    resp = httpx.post(url, json=payload, timeout=60.0)
+    resp.raise_for_status()
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def _groq_vision(b64: str, mime: str, key: str) -> str:
+    from groq import Groq
+    model = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.6-27b")
+    client = Groq(api_key=key)
     resp = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        model=model,
         messages=[{
             "role": "user",
             "content": [
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-                {"type": "text", "text": (
-                    "Describe everything visible in this image in full detail — "
-                    "including all text, numbers, labels, charts, diagrams, or visual content. "
-                    "Be thorough and precise."
-                )},
+                {"type": "text", "text": IMAGE_DESCRIBE_PROMPT},
             ],
         }],
         max_tokens=1024,
