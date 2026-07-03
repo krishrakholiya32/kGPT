@@ -3,33 +3,26 @@ fastapi
 uvicorn[standard]
 python-dotenv
 
-# ===== LangChain =====
-# Pinned below 1.0: langchain.memory.ConversationBufferWindowMemory
-# (backend/agent/memory.py) was removed in LangChain 1.0.
-# Constraining langchain-core keeps every integration package on the
-# compatible 0.3.x line. Upgrade only after migrating to LangGraph memory.
-langchain-core<1.0
-langchain<1.0
-langchain-community<1.0
-langchain-groq
-langchain-google-genai
+# ===== LLM (raw HTTP) =====
+# LangChain removed in favour of direct httpx calls to Groq + Gemini
+# (see backend/agent/llm.py). httpx is pinned explicitly.
+httpx>=0.27
 
-# ===== Database =====
-sqlalchemy
+# ===== Database (async Postgres) =====
+sqlalchemy[asyncio]
+asyncpg
 
 # ===== Auth =====
 pyjwt[crypto]
 pwdlib[argon2]
 python-multipart
 
-# ===== Search =====
-duckduckgo-search
-
 # ===== Validation =====
 pydantic[email]
 
-# ===== web search =====
+# ===== Web search =====
 ddgs
+duckduckgo-search
 
 # ===== Email =====
 # (uses stdlib smtplib — no extra package needed)

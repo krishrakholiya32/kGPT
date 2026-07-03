@@ -21,7 +21,7 @@ class User(Base):
     email_verified = Column(Boolean, default=False, nullable=False)
     verification_token = Column(String(255), nullable=True)
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )

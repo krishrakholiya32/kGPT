@@ -20,7 +20,8 @@ def send_verification_email(to_email: str, username: str, token: str) -> bool:
 
     base_url = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
     from_name = os.getenv("SMTP_FROM_NAME", "kGPT")
-    verify_url = f"{base_url}/verify.html?token={token}"
+    # Client-side SPA route handled by the React app (react-router).
+    verify_url = f"{base_url}/verify?token={token}"
 
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:40px 24px">

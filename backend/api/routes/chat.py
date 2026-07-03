@@ -1,8 +1,13 @@
-﻿"""
+"""
 Chat router for kGPT.
 Supports: general and web modes (auto-routed).
+
+Converted to async SQLAlchemy (AsyncSession / select / await) and the async,
+httpx-based LLM client. The SSE event shape is unchanged:
+{"type":"meta",...} -> {"type":"chunk","text":...} -> {"type":"done"} / {"type":"error",...}.
 """
 
+import asyncio
 import json
 import threading
 import time
@@ -11,20 +16,18 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agent.llm import build_llm, candidate_providers
 from backend.agent.tools import run_web_search
 from backend.api.auth import get_current_user
 from backend.api.models.chat import ChatMessage, ChatRequest, ChatResponse, Conversation, ConversationAttachment
 from backend.api.models.user import User
-from backend.database.db import get_db, SessionLocal
+from backend.database.db import get_db, AsyncSessionLocal
 
 chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -37,8 +40,23 @@ _WEEKLY_LIMIT = 1000   # max user messages per 7 days
 _rpm_buckets: dict[int, list[float]] = defaultdict(list)
 _rpm_lock = threading.Lock()
 
+_CLASSIFY_SYSTEM = (
+    "You are a routing classification agent for an AI assistant.\n"
+    "Analyze the user's message and decide whether it needs a live web search.\n\n"
+    "- 'web': Select this if the user is asking for real-time information, recent news, "
+    "current weather, stock prices today, sports scores, live info, or anything that "
+    "requires searching the web. Example queries: 'What is the latest AI news?', "
+    "'search the web for x', 'weather today in New York'.\n"
+    "- 'general': Select this for everything else - greetings, conversational banter, "
+    "general facts, coding help, real-world counting/estimate questions, or anything "
+    "that doesn't need live search. Example queries: 'hi', 'how are you?', "
+    "'tell me a joke', 'what is the capital of France?', 'how many scientists are there'.\n\n"
+    "Constraint: reply with exactly one word: 'web' or 'general'. No explanations, "
+    "markdown, code blocks, punctuation, or extra words."
+)
 
-def _check_rate_limits(user_id: int, db: Session) -> None:
+
+async def _check_rate_limits(user_id: int, db: AsyncSession) -> None:
     now = time.monotonic()
     with _rpm_lock:
         bucket = [t for t in _rpm_buckets[user_id] if now - t < 60]
@@ -52,14 +70,14 @@ def _check_rate_limits(user_id: int, db: Session) -> None:
 
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     weekly = (
-        db.query(func.count(ChatMessage.id))
-        .filter(
-            ChatMessage.user_id == user_id,
-            ChatMessage.role == "user",
-            ChatMessage.timestamp >= week_ago,
+        await db.execute(
+            select(func.count(ChatMessage.id)).where(
+                ChatMessage.user_id == user_id,
+                ChatMessage.role == "user",
+                ChatMessage.timestamp >= week_ago,
+            )
         )
-        .scalar()
-    ) or 0
+    ).scalar() or 0
     if weekly >= _WEEKLY_LIMIT:
         raise HTTPException(
             status_code=429,
@@ -67,29 +85,10 @@ def _check_rate_limits(user_id: int, db: Session) -> None:
         )
 
 
-def classify_query(query: str, llm) -> str:
+async def classify_query(query: str, llm) -> str:
     """Classify the user message as 'general' or 'web' (needs live web search)."""
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", (
-            "You are a routing classification agent for an AI assistant.\n"
-            "Analyze the user's message and decide whether it needs a live web search.\n\n"
-            "- 'web': Select this if the user is asking for real-time information, recent news, "
-            "current weather, stock prices today, sports scores, live info, or anything that "
-            "requires searching the web. Example queries: 'What is the latest AI news?', "
-            "'search the web for x', 'weather today in New York'.\n"
-            "- 'general': Select this for everything else - greetings, conversational banter, "
-            "general facts, coding help, real-world counting/estimate questions, or anything "
-            "that doesn't need live search. Example queries: 'hi', 'how are you?', "
-            "'tell me a joke', 'what is the capital of France?', 'how many scientists are there'.\n\n"
-            "Constraint: reply with exactly one word: 'web' or 'general'. No explanations, "
-            "markdown, code blocks, punctuation, or extra words."
-        )),
-        ("human", "{query}")
-    ])
-
-    chain = prompt | llm | StrOutputParser()
     try:
-        category = chain.invoke({"query": query}).strip().lower()
+        category = (await llm.ainvoke(query, system=_CLASSIFY_SYSTEM)).strip().lower()
         for cat in ["web", "general"]:
             if cat in category:
                 return cat
@@ -111,7 +110,7 @@ def _save_message(db, user_id, role, content, mode, conversation_id=None):
     return msg
 
 
-def _resolve_conversation(db, user_id, conversation_id, first_message=""):
+async def _resolve_conversation(db, user_id, conversation_id, first_message=""):
     """Return the Conversation to use, creating one if needed.
 
     - Explicit valid id -> that conversation.
@@ -120,22 +119,26 @@ def _resolve_conversation(db, user_id, conversation_id, first_message=""):
     conv = None
     if conversation_id:
         conv = (
-            db.query(Conversation)
-            .filter(Conversation.id == conversation_id, Conversation.user_id == user_id)
-            .first()
-        )
+            await db.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id,
+                    Conversation.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
     if conv is None and not conversation_id:
         conv = (
-            db.query(Conversation)
-            .filter(Conversation.user_id == user_id)
-            .order_by(Conversation.updated_at.desc())
-            .first()
-        )
+            await db.execute(
+                select(Conversation)
+                .where(Conversation.user_id == user_id)
+                .order_by(Conversation.updated_at.desc())
+            )
+        ).scalars().first()
     if conv is None:
         title = (first_message or "New chat").strip()[:60] or "New chat"
         conv = Conversation(user_id=user_id, title=title)
         db.add(conv)
-        db.flush()
+        await db.flush()
 
     # Give a freshly-created chat a real title from its first message.
     fm = (first_message or "").strip()
@@ -145,15 +148,16 @@ def _resolve_conversation(db, user_id, conversation_id, first_message=""):
     return conv
 
 
-def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
+async def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
     """Load recent conversation history directly from DB — works across workers and restarts."""
     msgs = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.user_id == user_id, ChatMessage.conversation_id == conversation_id)
-        .order_by(ChatMessage.timestamp.desc())
-        .limit(limit * 2)
-        .all()
-    )
+        await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.user_id == user_id, ChatMessage.conversation_id == conversation_id)
+            .order_by(ChatMessage.timestamp.desc())
+            .limit(limit * 2)
+        )
+    ).scalars().all()
     msgs = list(reversed(msgs))
     lines = ""
     for msg in msgs:
@@ -162,26 +166,29 @@ def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
     return lines
 
 
-def _file_context_preamble(db, conv_id: int) -> str:
+async def _file_context_preamble(db, conv_id: int) -> str:
     """Return a formatted preamble with all attached file contexts for this conversation, or ''."""
     atts = (
-        db.query(ConversationAttachment)
-        .filter(ConversationAttachment.conversation_id == conv_id)
-        .order_by(ConversationAttachment.uploaded_at.asc())
-        .all()
-    )
+        await db.execute(
+            select(ConversationAttachment)
+            .where(ConversationAttachment.conversation_id == conv_id)
+            .order_by(ConversationAttachment.uploaded_at.asc())
+        )
+    ).scalars().all()
     if atts:
         parts = [f"[Attached file: {a.filename}]\n{a.context_text}" for a in atts]
         return "\n\n".join(parts) + "\n\n"
     # Legacy fallback for old single-attachment rows
-    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    conv = (
+        await db.execute(select(Conversation).where(Conversation.id == conv_id))
+    ).scalar_one_or_none()
     if conv and conv.context:
         name = conv.attachment_name or "attached file"
         return f"[Attached file: {name}]\n{conv.context}\n\n"
     return ""
 
 
-def _resolve_search_query(llm, user_message, history_text):
+async def _resolve_search_query(llm, user_message, history_text):
     """If the message is a short follow-up, expand it into a self-contained search query."""
     if not history_text or len(user_message.split()) > 6:
         return user_message
@@ -191,15 +198,14 @@ def _resolve_search_query(llm, user_message, history_text):
         f"Rewrite their message as a single, self-contained web search query "
         f"(no explanation, just the query):"
     )
-    result = llm.invoke(prompt)
-    query = result.content if hasattr(result, "content") else str(result)
+    query = await llm.ainvoke(prompt)
     return query.strip().strip('"')
 
 
-def _run_mode(llm, mode, user_message, db, user_id, conv_id):
+async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM and return the response text."""
-    history_text = _history_text_from_db(db, user_id, conv_id)
-    ctx = _file_context_preamble(db, conv_id)
+    history_text = await _history_text_from_db(db, user_id, conv_id)
+    ctx = await _file_context_preamble(db, conv_id)
 
     if mode == "general":
         parts = []
@@ -208,28 +214,26 @@ def _run_mode(llm, mode, user_message, db, user_id, conv_id):
         if history_text:
             parts.append(f"Previous conversation:\n{history_text}")
         parts.append(f"User: {user_message}\nAssistant:")
-        result = llm.invoke("\n".join(parts))
-        return result.content if hasattr(result, "content") else str(result)
+        return await llm.ainvoke("\n".join(parts))
 
     if mode == "web":
-        search_query = _resolve_search_query(llm, user_message, history_text)
-        search_results = run_web_search(search_query)
+        search_query = await _resolve_search_query(llm, user_message, history_text)
+        search_results = await asyncio.to_thread(run_web_search, search_query)
         summary_prompt = (
             (ctx if ctx else "") +
             (f"Previous conversation:\n{history_text}\n" if history_text else "") +
             f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
             f"Search Results:\n{search_results}\n\nAnswer:"
         )
-        result = llm.invoke(summary_prompt)
-        return result.content if hasattr(result, "content") else str(result)
+        return await llm.ainvoke(summary_prompt)
 
     return f"Unknown mode '{mode}'. Supported: general, web."
 
 
-def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
+async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     """Return a text prompt for the given mode (general or web), else None."""
-    history_text = _history_text_from_db(db, user_id, conv_id)
-    ctx = _file_context_preamble(db, conv_id)
+    history_text = await _history_text_from_db(db, user_id, conv_id)
+    ctx = await _file_context_preamble(db, conv_id)
 
     if mode == "general":
         parts = []
@@ -244,34 +248,33 @@ def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     return None
 
 
-def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None):
-    """Save a user/assistant exchange using a fresh DB session (safe during streaming).
+async def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None):
+    """Save a user/assistant exchange using a fresh async DB session (safe during streaming).
     Always saves the user message; saves assistant reply only if answer is non-empty."""
-    db = SessionLocal()
-    try:
+    async with AsyncSessionLocal() as db:
         _save_message(db, user_id, "user", user_message, mode, conversation_id)
         if answer:
             _save_message(db, user_id, "assistant", answer, mode, conversation_id)
         if conversation_id:
-            conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            conv = (
+                await db.execute(select(Conversation).where(Conversation.id == conversation_id))
+            ).scalar_one_or_none()
             if conv:
                 conv.updated_at = datetime.now(timezone.utc)
-        db.commit()
-    finally:
-        db.close()
+        await db.commit()
 
 
 @chat_router.post("", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    _check_rate_limits(current_user.id, db)
+    await _check_rate_limits(current_user.id, db)
     user_message = request.message
     requested_mode = request.mode or "auto"
 
-    conv = _resolve_conversation(db, current_user.id, request.conversation_id, user_message)
+    conv = await _resolve_conversation(db, current_user.id, request.conversation_id, user_message)
     conv_id = conv.id
 
     providers = candidate_providers()
@@ -284,11 +287,11 @@ async def chat(
         try:
             llm = build_llm(provider)
             mode = (
-                classify_query(user_message, llm)
+                await classify_query(user_message, llm)
                 if requested_mode == "auto"
                 else requested_mode
             )
-            response_text = _run_mode(llm, mode, user_message, db, current_user.id, conv_id)
+            response_text = await _run_mode(llm, mode, user_message, db, current_user.id, conv_id)
             final_mode = mode
             used_provider = provider
             break
@@ -309,7 +312,7 @@ async def chat(
     _save_message(db, current_user.id, "user", user_message, final_mode, conv_id)
     _save_message(db, current_user.id, "assistant", response_text, final_mode, conv_id)
     conv.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     return ChatResponse(response=response_text, mode=final_mode)
 
 
@@ -322,23 +325,17 @@ async def chat_stream(
     {"type":"meta","mode":..,"provider":..} -> {"type":"chunk","text":..} -> {"type":"done"}.
     Both general and web modes stream token-by-token.
     """
-    _rdb = SessionLocal()
-    try:
-        _check_rate_limits(current_user.id, _rdb)
-    finally:
-        _rdb.close()
+    async with AsyncSessionLocal() as _rdb:
+        await _check_rate_limits(current_user.id, _rdb)
 
     user_message = request.message
     requested_mode = request.mode or "auto"
 
     # Resolve the conversation up front (create one if needed).
-    _cdb = SessionLocal()
-    try:
-        conv = _resolve_conversation(_cdb, current_user.id, request.conversation_id, user_message)
+    async with AsyncSessionLocal() as _cdb:
+        conv = await _resolve_conversation(_cdb, current_user.id, request.conversation_id, user_message)
         conv_id = conv.id
-        _cdb.commit()
-    finally:
-        _cdb.close()
+        await _cdb.commit()
 
     def sse(obj):
         return f"data: {json.dumps(obj)}\n\n"
@@ -354,7 +351,7 @@ async def chat_stream(
         try:
             llm = build_llm(provider)
             mode = (
-                classify_query(user_message, llm)
+                await classify_query(user_message, llm)
                 if requested_mode == "auto"
                 else requested_mode
             )
@@ -368,21 +365,18 @@ async def chat_stream(
     if chosen is None:
         raise HTTPException(status_code=503, detail=f"No LLM provider available: {last_error}")
 
-    def event_stream():
+    async def event_stream():
         collected = []
         user_msg_saved = False
         try:
             yield sse({"type": "meta", "mode": mode, "provider": chosen, "conversation_id": conv_id})
-            _db = SessionLocal()
-            try:
-                text_prompt = _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
-            finally:
-                _db.close()
+            async with AsyncSessionLocal() as _db:
+                text_prompt = await _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
 
             if isinstance(text_prompt, tuple):
                 _, _msg, _hist, _ctx = text_prompt
-                search_query = _resolve_search_query(llm, _msg, _hist)
-                search_results = run_web_search(search_query)
+                search_query = await _resolve_search_query(llm, _msg, _hist)
+                search_results = await asyncio.to_thread(run_web_search, search_query)
                 text_prompt = (
                     (_ctx if _ctx else "") +
                     (f"Previous conversation:\n{_hist}\n" if _hist else "") +
@@ -391,32 +385,27 @@ async def chat_stream(
                 )
 
             # Save user message NOW — after building the prompt (so it won't appear in
-            # history twice) but before streaming starts. The sync generator keeps running
+            # history twice) but before streaming starts. The generator keeps running
             # even after the client aborts, so the finally block may arrive too late for
             # a quick "continue" — saving here ensures the DB is updated immediately.
-            _udb = SessionLocal()
-            try:
+            async with AsyncSessionLocal() as _udb:
                 _save_message(_udb, current_user.id, "user", user_message, mode, conv_id)
-                _udb.commit()
+                await _udb.commit()
                 user_msg_saved = True
-            finally:
-                _udb.close()
 
             if text_prompt is not None:
-                for chunk in llm.stream(text_prompt):
-                    piece = getattr(chunk, "content", "") or ""
+                async for piece in llm.astream(text_prompt):
                     if piece:
                         collected.append(piece)
                         yield sse({"type": "chunk", "text": piece})
             else:
-                _db2 = SessionLocal()
-                try:
-                    text = _run_mode(llm, mode, user_message, _db2, current_user.id, conv_id)
-                finally:
-                    _db2.close()
+                async with AsyncSessionLocal() as _db2:
+                    text = await _run_mode(llm, mode, user_message, _db2, current_user.id, conv_id)
                 collected.append(text)
                 yield sse({"type": "chunk", "text": text})
             yield sse({"type": "done"})
+        except asyncio.CancelledError:
+            pass
         except GeneratorExit:
             pass
         except Exception as exc:
@@ -429,19 +418,20 @@ async def chat_stream(
                 if user_msg_saved:
                     # User message already saved; only persist the assistant reply.
                     if answer:
-                        _adb = SessionLocal()
-                        try:
+                        async with AsyncSessionLocal() as _adb:
                             _save_message(_adb, current_user.id, "assistant", answer, mode, conv_id)
                             if conv_id:
-                                _conv = _adb.query(Conversation).filter(Conversation.id == conv_id).first()
+                                _conv = (
+                                    await _adb.execute(
+                                        select(Conversation).where(Conversation.id == conv_id)
+                                    )
+                                ).scalar_one_or_none()
                                 if _conv:
                                     _conv.updated_at = datetime.now(timezone.utc)
-                            _adb.commit()
-                        finally:
-                            _adb.close()
+                            await _adb.commit()
                 else:
                     # User message wasn't saved yet (error before that point); save both.
-                    _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
+                    await _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
             except Exception:
                 traceback.print_exc()
             print(f"[kGPT] streamed mode={mode} provider={chosen}")
@@ -468,13 +458,15 @@ async def upload_attachment(
     conv_id: int,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     conv = (
-        db.query(Conversation)
-        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
-        .first()
-    )
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id, Conversation.user_id == current_user.id
+            )
+        )
+    ).scalar_one_or_none()
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -487,10 +479,12 @@ async def upload_attachment(
         raise HTTPException(status_code=413, detail="File too large. Max 10 MB.")
 
     existing_count = (
-        db.query(func.count(ConversationAttachment.id))
-        .filter(ConversationAttachment.conversation_id == conv_id)
-        .scalar()
-    ) or 0
+        await db.execute(
+            select(func.count(ConversationAttachment.id)).where(
+                ConversationAttachment.conversation_id == conv_id
+            )
+        )
+    ).scalar() or 0
     if existing_count >= MAX_ATTACHMENTS:
         raise HTTPException(
             status_code=400,
@@ -499,7 +493,7 @@ async def upload_attachment(
 
     try:
         from backend.agent.file_extractor import extract_text
-        context = extract_text(data, file.filename)
+        context = await asyncio.to_thread(extract_text, data, file.filename)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not extract file content: {exc}")
 
@@ -510,7 +504,7 @@ async def upload_attachment(
     )
     db.add(att)
     conv.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     return {"filename": file.filename, "count": existing_count + 1}
 
 
@@ -518,53 +512,60 @@ async def upload_attachment(
 async def delete_attachment(
     conv_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     conv = (
-        db.query(Conversation)
-        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
-        .first()
-    )
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id, Conversation.user_id == current_user.id
+            )
+        )
+    ).scalar_one_or_none()
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    db.query(ConversationAttachment).filter(
-        ConversationAttachment.conversation_id == conv_id
-    ).delete()
+    await db.execute(
+        ConversationAttachment.__table__.delete().where(
+            ConversationAttachment.conversation_id == conv_id
+        )
+    )
     conv.context = None
     conv.attachment_name = None
     conv.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     return {"status": "removed"}
 
 
 @chat_router.get("/conversations")
 async def list_conversations(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     convs = (
-        db.query(Conversation)
-        .filter(Conversation.user_id == current_user.id)
-        .order_by(Conversation.updated_at.desc())
-        .all()
-    )
+        await db.execute(
+            select(Conversation)
+            .where(Conversation.user_id == current_user.id)
+            .order_by(Conversation.updated_at.desc())
+        )
+    ).scalars().all()
     conv_ids = [c.id for c in convs]
     count_map: dict[int, int] = {}
     att_map: dict[int, list] = {}
     if conv_ids:
         msg_rows = (
-            db.query(ChatMessage.conversation_id, func.count(ChatMessage.id))
-            .filter(ChatMessage.conversation_id.in_(conv_ids))
-            .group_by(ChatMessage.conversation_id)
-            .all()
-        )
+            await db.execute(
+                select(ChatMessage.conversation_id, func.count(ChatMessage.id))
+                .where(ChatMessage.conversation_id.in_(conv_ids))
+                .group_by(ChatMessage.conversation_id)
+            )
+        ).all()
         count_map = {cid: cnt for cid, cnt in msg_rows}
         att_rows = (
-            db.query(ConversationAttachment.conversation_id, ConversationAttachment.filename)
-            .filter(ConversationAttachment.conversation_id.in_(conv_ids))
-            .order_by(ConversationAttachment.uploaded_at.asc())
-            .all()
-        )
+            await db.execute(
+                select(ConversationAttachment.conversation_id, ConversationAttachment.filename)
+                .where(ConversationAttachment.conversation_id.in_(conv_ids))
+                .order_by(ConversationAttachment.uploaded_at.asc())
+            )
+        ).all()
         for cid, fname in att_rows:
             att_map.setdefault(cid, []).append(fname)
     result = []
@@ -583,12 +584,12 @@ async def list_conversations(
 @chat_router.post("/conversations")
 async def create_conversation(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     conv = Conversation(user_id=current_user.id, title="New chat")
     db.add(conv)
-    db.commit()
-    db.refresh(conv)
+    await db.commit()
+    await db.refresh(conv)
     return {**_conv_dict(conv), "message_count": 0, "attachment_names": []}
 
 
@@ -596,21 +597,24 @@ async def create_conversation(
 async def conversation_messages(
     conv_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     conv = (
-        db.query(Conversation)
-        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
-        .first()
-    )
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id, Conversation.user_id == current_user.id
+            )
+        )
+    ).scalar_one_or_none()
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     msgs = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.conversation_id == conv_id)
-        .order_by(ChatMessage.timestamp.asc())
-        .all()
-    )
+        await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conv_id)
+            .order_by(ChatMessage.timestamp.asc())
+        )
+    ).scalars().all()
     return [
         {
             "id": m.id,
@@ -627,21 +631,27 @@ async def conversation_messages(
 async def delete_conversation(
     conv_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     conv = (
-        db.query(Conversation)
-        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
-        .first()
-    )
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id, Conversation.user_id == current_user.id
+            )
+        )
+    ).scalar_one_or_none()
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    db.query(ConversationAttachment).filter(
-        ConversationAttachment.conversation_id == conv_id
-    ).delete()
-    db.query(ChatMessage).filter(ChatMessage.conversation_id == conv_id).delete()
-    db.delete(conv)
-    db.commit()
+    await db.execute(
+        ConversationAttachment.__table__.delete().where(
+            ConversationAttachment.conversation_id == conv_id
+        )
+    )
+    await db.execute(
+        ChatMessage.__table__.delete().where(ChatMessage.conversation_id == conv_id)
+    )
+    await db.delete(conv)
+    await db.commit()
     return {"status": "deleted"}
 
 
@@ -650,17 +660,19 @@ async def rename_conversation(
     conv_id: int,
     title: str = Body(..., embed=True),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     conv = (
-        db.query(Conversation)
-        .filter(Conversation.id == conv_id, Conversation.user_id == current_user.id)
-        .first()
-    )
+        await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id, Conversation.user_id == current_user.id
+            )
+        )
+    ).scalar_one_or_none()
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     new_title = (title or "").strip()[:60]
     if new_title:
         conv.title = new_title
-        db.commit()
+        await db.commit()
     return _conv_dict(conv)

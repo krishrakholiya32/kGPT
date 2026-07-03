@@ -1,5 +1,9 @@
 """
 JWT Authentication module for kGPT.
+
+Converted to async SQLAlchemy: every DB access uses ``AsyncSession`` +
+``select()`` + ``await`` instead of the synchronous ``Session`` / ``.query()``
+pattern. Route behaviour, validation messages, and responses are unchanged.
 """
 
 import os
@@ -14,7 +18,8 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, field_validator
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.db import get_db
 from backend.api.models.user import User
@@ -51,7 +56,7 @@ def create_access_token(data: dict, expires_delta=None) -> str:
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -72,7 +77,9 @@ async def get_current_user(
     except jwt.InvalidTokenError:
         raise credentials_exception
 
-    user = db.query(User).filter(User.username == username).first()
+    user = (
+        await db.execute(select(User).where(User.username == username))
+    ).scalar_one_or_none()
     if user is None:
         raise credentials_exception
     return user
@@ -142,10 +149,16 @@ auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @auth_router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(request: RegisterRequest, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.username == request.username).first():
+async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    existing_username = (
+        await db.execute(select(User).where(User.username == request.username))
+    ).scalar_one_or_none()
+    if existing_username:
         raise HTTPException(status_code=400, detail="Username already registered")
-    if db.query(User).filter(User.email == request.email).first():
+    existing_email = (
+        await db.execute(select(User).where(User.email == request.email))
+    ).scalar_one_or_none()
+    if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     new_user = User(
@@ -155,8 +168,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         email_verified=True,
     )
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    await db.commit()
+    await db.refresh(new_user)
 
     access_token = create_access_token(data={"sub": new_user.username})
     return TokenResponse(access_token=access_token, email_verified=True)
@@ -165,10 +178,12 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
 @auth_router.post("/login", response_model=TokenResponse)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     # form_data.username field is used for the email input
-    user = db.query(User).filter(User.email == form_data.username).first()
+    user = (
+        await db.execute(select(User).where(User.email == form_data.username))
+    ).scalar_one_or_none()
     if user is None or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -180,26 +195,30 @@ async def login(
 
 
 @auth_router.post("/verify-email", response_model=TokenResponse)
-async def verify_email(request: VerifyEmailRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.verification_token == request.token).first()
+async def verify_email(request: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    user = (
+        await db.execute(select(User).where(User.verification_token == request.token))
+    ).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=400, detail="Invalid or expired verification link.")
     user.email_verified = True
     user.verification_token = None
-    db.commit()
+    await db.commit()
     access_token = create_access_token(data={"sub": user.username})
     return TokenResponse(access_token=access_token, email_verified=True)
 
 
 @auth_router.post("/resend-verification")
-async def resend_verification(request: ResendVerificationRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == request.email).first()
+async def resend_verification(request: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    user = (
+        await db.execute(select(User).where(User.email == request.email))
+    ).scalar_one_or_none()
     if not user or user.email_verified:
         # Don't reveal whether an email is registered
         return {"message": "If that address is registered and unverified, a new link has been sent."}
     token = secrets.token_urlsafe(32)
     user.verification_token = token
-    db.commit()
+    await db.commit()
     send_verification_email(user.email, user.username, token)
     return {"message": "Verification email sent."}
 
@@ -208,18 +227,26 @@ async def resend_verification(request: ResendVerificationRequest, db: Session = 
 async def check_availability(
     username: Optional[str] = Query(None),
     email: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     result = {}
     if username is not None:
         v = username.strip()
         valid_format = bool(re.fullmatch(r"[A-Za-z0-9_]{3,30}", v))
-        taken = bool(valid_format and db.query(User).filter(User.username == v).first())
+        taken = False
+        if valid_format:
+            taken = bool(
+                (await db.execute(select(User).where(User.username == v))).scalar_one_or_none()
+            )
         result["username"] = {"valid_format": valid_format, "taken": taken}
     if email is not None:
         v = email.strip()
         valid_format = bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", v))
-        taken = bool(valid_format and db.query(User).filter(User.email == v).first())
+        taken = False
+        if valid_format:
+            taken = bool(
+                (await db.execute(select(User).where(User.email == v))).scalar_one_or_none()
+            )
         result["email"] = {"valid_format": valid_format, "taken": taken}
     return result
 

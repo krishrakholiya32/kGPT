@@ -1,79 +1,117 @@
 """
 Database Module for kGPT.
+
+Async SQLAlchemy against PostgreSQL (asyncpg driver).
+
+Migrated from the previous synchronous SQLite + WAL-mode setup. Postgres handles
+concurrent writers natively, so the old ``PRAGMA journal_mode=WAL`` pragma is gone.
+The hand-written idempotent migrations are kept but rewritten to run on the async
+engine via ``conn.run_sync(...)``; they still run safely on every startup, whether
+against a brand-new Postgres database or one that already has the columns/tables.
 """
 
 import os
-from typing import Generator
+from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session, declarative_base
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import declarative_base
 
 load_dotenv()
 
-DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./database/data.db")
+# Default to a local Postgres. asyncpg is the async driver.
+DATABASE_URL: str = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://kgpt:kgpt@localhost:5432/kgpt",
+)
 
-engine = create_engine(
+
+def _normalize_async_url(url: str) -> str:
+    """Coerce common Postgres URL forms to the asyncpg driver.
+
+    Heroku/Render style ``postgres://`` and plain ``postgresql://`` URLs are
+    rewritten to ``postgresql+asyncpg://`` so the async engine can use them.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+asyncpg" not in url:
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
+DATABASE_URL = _normalize_async_url(DATABASE_URL)
+
+engine = create_async_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
     pool_pre_ping=True,
     echo=False,
 )
 
-if "sqlite" in DATABASE_URL:
-    from sqlalchemy import event as _sa_event
+# expire_on_commit=False keeps attributes usable after commit without another
+# (async) round-trip — matches ClauseGuard's async session pattern.
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-    @_sa_event.listens_for(engine, "connect")
-    def _set_wal_mode(conn, _rec):
-        conn.execute("PRAGMA journal_mode=WAL")
+# Backwards-compatible alias: existing call sites used ``SessionLocal()``.
+SessionLocal = AsyncSessionLocal
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
 
 
-def _migrate_conversations() -> None:
+# ---------------------------------------------------------------------------
+# Idempotent hand-written migrations
+#
+# On a fresh Postgres database, ``Base.metadata.create_all`` (run first in
+# init_db) already creates every table/column from the models, so each of these
+# finds the target already present and becomes a no-op. Their real job is
+# migrating a pre-existing database that is missing newer columns/tables. Each
+# uses ``conn.run_sync`` because SQLAlchemy's ``inspect`` needs a sync-style
+# connection, then executes plain DDL that is valid on Postgres.
+# ---------------------------------------------------------------------------
+
+
+async def _migrate_conversations() -> None:
     """Add conversation support to an existing database without losing data.
 
     - Adds chat_messages.conversation_id if missing.
     - Moves each user's existing (unassigned) messages into one 'Imported chat'
       conversation so prior history is preserved.
-    Safe to run repeatedly; wrapped by caller so a failure never blocks startup.
+    Safe to run repeatedly.
     """
     from datetime import datetime, timezone
     from sqlalchemy import text, inspect
 
-    insp = inspect(engine)
-    tables = insp.get_table_names()
-    if "chat_messages" not in tables:
-        return
+    def _do(conn) -> None:
+        insp = inspect(conn)
+        tables = insp.get_table_names()
+        if "chat_messages" not in tables or "conversations" not in tables:
+            return
 
-    cols = [c["name"] for c in insp.get_columns("chat_messages")]
-    with engine.begin() as conn:
+        cols = [c["name"] for c in insp.get_columns("chat_messages")]
         if "conversation_id" not in cols:
             conn.execute(text("ALTER TABLE chat_messages ADD COLUMN conversation_id INTEGER"))
 
         orphans = conn.execute(
             text("SELECT DISTINCT user_id FROM chat_messages WHERE conversation_id IS NULL")
         ).fetchall()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         for row in orphans:
             uid = row[0]
-            res = conn.execute(
+            conv_id = conn.execute(
                 text(
                     "INSERT INTO conversations (user_id, title, created_at, updated_at) "
-                    "VALUES (:uid, :title, :now, :now)"
+                    "VALUES (:uid, :title, :now, :now) RETURNING id"
                 ),
                 {"uid": uid, "title": "Imported chat", "now": now},
-            )
-            conv_id = res.lastrowid
+            ).scalar()
             conn.execute(
                 text(
                     "UPDATE chat_messages SET conversation_id = :cid "
@@ -82,8 +120,11 @@ def _migrate_conversations() -> None:
                 {"cid": conv_id, "uid": uid},
             )
 
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
 
-def _migrate_users() -> None:
+
+async def _migrate_users() -> None:
     """Add email_verified and verification_token columns to existing users tables.
 
     Existing users default to verified=True so they are not locked out.
@@ -91,63 +132,71 @@ def _migrate_users() -> None:
     """
     from sqlalchemy import text, inspect
 
-    insp = inspect(engine)
-    if "users" not in insp.get_table_names():
-        return
-    cols = [c["name"] for c in insp.get_columns("users")]
-    with engine.begin() as conn:
+    def _do(conn) -> None:
+        insp = inspect(conn)
+        if "users" not in insp.get_table_names():
+            return
+        cols = [c["name"] for c in insp.get_columns("users")]
         if "email_verified" not in cols:
             conn.execute(text(
-                "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1"
+                "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT TRUE"
             ))
         if "verification_token" not in cols:
             conn.execute(text(
                 "ALTER TABLE users ADD COLUMN verification_token VARCHAR(255)"
             ))
 
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
 
-def _migrate_attachments() -> None:
-    """Add context and attachment_name columns to conversations table. Safe to run repeatedly."""
+
+async def _migrate_attachments() -> None:
+    """Add legacy context and attachment_name columns to conversations. Safe to run repeatedly."""
     from sqlalchemy import text, inspect
 
-    insp = inspect(engine)
-    if "conversations" not in insp.get_table_names():
-        return
-    cols = [c["name"] for c in insp.get_columns("conversations")]
-    with engine.begin() as conn:
+    def _do(conn) -> None:
+        insp = inspect(conn)
+        if "conversations" not in insp.get_table_names():
+            return
+        cols = [c["name"] for c in insp.get_columns("conversations")]
         if "context" not in cols:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN context TEXT"))
         if "attachment_name" not in cols:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN attachment_name VARCHAR(255)"))
 
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
 
-def _migrate_attachment_table() -> None:
-    """Create conversation_attachments table and migrate any legacy single-attachment data. Safe to run repeatedly."""
+
+async def _migrate_attachment_table() -> None:
+    """Create conversation_attachments table and migrate any legacy single-attachment data.
+
+    Safe to run repeatedly.
+    """
     from datetime import datetime, timezone
     from sqlalchemy import text, inspect
 
-    insp = inspect(engine)
-    if "conversation_attachments" not in insp.get_table_names():
-        with engine.begin() as conn:
+    def _do(conn) -> None:
+        insp = inspect(conn)
+        if "conversation_attachments" not in insp.get_table_names():
             conn.execute(text("""
                 CREATE TABLE conversation_attachments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     conversation_id INTEGER NOT NULL REFERENCES conversations(id),
                     filename VARCHAR(255) NOT NULL,
                     context_text TEXT NOT NULL,
-                    uploaded_at DATETIME NOT NULL
+                    uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL
                 )
             """))
             conn.execute(text(
                 "CREATE INDEX idx_conv_att_cid ON conversation_attachments(conversation_id)"
             ))
 
-    # Migrate any legacy rows (conversation.context IS NOT NULL)
-    if "conversations" in insp.get_table_names():
-        cols = [c["name"] for c in insp.get_columns("conversations")]
-        if "context" in cols and "attachment_name" in cols:
-            now = datetime.now(timezone.utc).isoformat()
-            with engine.begin() as conn:
+        # Migrate any legacy rows (conversation.context IS NOT NULL)
+        if "conversations" in insp.get_table_names():
+            cols = [c["name"] for c in insp.get_columns("conversations")]
+            if "context" in cols and "attachment_name" in cols:
+                now = datetime.now(timezone.utc)
                 rows = conn.execute(text(
                     "SELECT id, attachment_name, context FROM conversations "
                     "WHERE context IS NOT NULL AND attachment_name IS NOT NULL"
@@ -167,34 +216,33 @@ def _migrate_attachment_table() -> None:
                         "UPDATE conversations SET context=NULL, attachment_name=NULL WHERE id=:cid"
                     ), {"cid": conv_id})
 
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
 
-def init_db() -> None:
+
+async def init_db() -> None:
     from backend.api.models.user import User  # noqa: F401
     from backend.api.models.chat import ChatMessage, Conversation, ConversationAttachment  # noqa: F401
 
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    db_dir = os.path.dirname(db_path)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-
-    Base.metadata.create_all(bind=engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     try:
-        _migrate_conversations()
+        await _migrate_conversations()
     except Exception as exc:
         print(f"[kGPT] conversation migration skipped: {exc}")
 
     try:
-        _migrate_users()
+        await _migrate_users()
     except Exception as exc:
         print(f"[kGPT] user migration skipped: {exc}")
 
     try:
-        _migrate_attachments()
+        await _migrate_attachments()
     except Exception as exc:
         print(f"[kGPT] attachment migration skipped: {exc}")
 
     try:
-        _migrate_attachment_table()
+        await _migrate_attachment_table()
     except Exception as exc:
         print(f"[kGPT] attachment-table migration skipped: {exc}")

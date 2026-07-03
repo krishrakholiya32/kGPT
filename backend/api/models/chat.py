@@ -23,7 +23,7 @@ class ChatMessage(Base):
     mode = Column(String(50), nullable=False, default="general")
     sources = Column(Text, nullable=True)
     timestamp = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
@@ -49,10 +49,10 @@ class Conversation(Base):
     context = Column(Text, nullable=True)           # legacy — superseded by conversation_attachments
     attachment_name = Column(String(255), nullable=True)  # legacy
     created_at = Column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     updated_at = Column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     def __repr__(self):
@@ -66,7 +66,7 @@ class ConversationAttachment(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
     filename = Column(String(255), nullable=False)
     context_text = Column(Text, nullable=False)
-    uploaded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 # Pydantic Schemas
