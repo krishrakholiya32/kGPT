@@ -1,0 +1,32 @@
+{
+  "name": "kgpt-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "highlight.js": "^11.9.0",
+    "katex": "^0.16.9",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-markdown": "^9.0.1",
+    "react-router-dom": "^7.18.0",
+    "rehype-highlight": "^7.0.0",
+    "rehype-katex": "^7.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
+  }
+}
