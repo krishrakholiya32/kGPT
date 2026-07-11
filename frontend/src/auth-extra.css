@@ -1,8 +1,8 @@
-/* ===== Auth-page-specific styles (ported from login.html / verify.html) ===== */
+/* ===== Auth-page-specific styles (ported from login.html) ===== */
 
 /* The global stylesheet locks html/body to the viewport (overflow:hidden) for
-   the chat app. Auth pages need to scroll, so we opt in via a body class that
-   the Login/Verify pages toggle on mount. */
+   the chat app. The auth page needs to scroll, so we opt in via a body class
+   that the Login page toggles on mount. */
 body.auth-scroll,
 body.auth-scroll #root {
   height: auto !important;
@@ -18,58 +18,3 @@ input[readonly] { opacity: 1; cursor: text; background: inherit; color: inherit;
 .field-hint.ok      { color: #4caf50; }
 .field-hint.error   { color: #ef5350; }
 .field-hint.loading { color: var(--text-muted); }
-
-/* Email verification pending screen */
-.verify-pending { text-align: center; padding: 8px 0 4px; }
-.verify-pending .verify-icon { font-size: 48px; margin-bottom: 16px; }
-.verify-pending h2 { margin: 0 0 10px; font-size: 20px; color: var(--text); }
-.verify-pending p  { color: var(--text-muted); font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
-.verify-pending .verify-email-addr {
-  display: inline-block; background: var(--surface2);
-  padding: 6px 14px; border-radius: 6px; font-weight: 600; margin-bottom: 20px;
-  word-break: break-all;
-}
-.resend-btn {
-  background: none; border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 22px; cursor: pointer; font-size: 14px; color: var(--text-muted);
-  transition: all .2s;
-}
-.resend-btn:hover { background: var(--surface2); }
-.resend-msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
-.back-link { display: block; margin-top: 16px; font-size: 13px; color: var(--text-muted); cursor: pointer; }
-.back-link:hover { text-decoration: underline; }
-
-/* ===== Verify email landing page (ported from verify.html) ===== */
-.verify-card {
-  max-width: 440px;
-  margin: 80px auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 48px 40px;
-  text-align: center;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-}
-.verify-card .verify-icon { font-size: 56px; margin-bottom: 20px; }
-.verify-card h1 { margin: 0 0 4px; font-size: 22px; }
-.verify-card h1 span { color: #6c63ff; }
-.verify-card p { color: var(--text-muted); font-size: 14px; line-height: 1.6; margin: 12px 0 0; }
-.verify-status { margin-top: 24px; font-size: 15px; min-height: 22px; }
-.verify-status.ok    { color: #4caf50; }
-.verify-status.error { color: #ef5350; }
-.spinner {
-  width: 32px; height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: #6c63ff;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  margin: 20px auto 0;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.redirect-msg { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
-.go-btn {
-  display: inline-block; margin-top: 20px;
-  padding: 12px 28px; background: #6c63ff; color: #fff;
-  text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px;
-}
-.go-btn:hover { background: #5a52d5; }

@@ -8,12 +8,11 @@ pattern. Route behaviour, validation messages, and responses are unchanged.
 
 import os
 import re
-import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, field_validator
 from pwdlib import PasswordHash
@@ -23,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.db import get_db
 from backend.api.models.user import User
-from backend.agent.email import send_verification_email
 
 password_hash = PasswordHash((Argon2Hasher(),))
 
@@ -122,7 +120,6 @@ class RegisterRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    email_verified: bool = True
 
 
 class UserResponse(BaseModel):
@@ -133,14 +130,6 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-class VerifyEmailRequest(BaseModel):
-    token: str
-
-
-class ResendVerificationRequest(BaseModel):
-    email: str
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -161,25 +150,18 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    verification_token = secrets.token_urlsafe(32)
     new_user = User(
         username=request.username,
         email=request.email,
         password_hash=hash_password(request.password),
-        email_verified=False,
-        verification_token=verification_token,
+        email_verified=True,
     )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
 
-    send_verification_email(new_user.email, new_user.username, verification_token)
-
-    # Soft gate: the user is logged in immediately (matches the frontend's
-    # existing "check your inbox" pending screen for email_verified=False),
-    # verification is a follow-up nudge, not a login block.
     access_token = create_access_token(data={"sub": new_user.username})
-    return TokenResponse(access_token=access_token, email_verified=False)
+    return TokenResponse(access_token=access_token)
 
 
 @auth_router.post("/login", response_model=TokenResponse)
@@ -198,36 +180,7 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token = create_access_token(data={"sub": user.username})
-    return TokenResponse(access_token=access_token, email_verified=user.email_verified)
-
-
-@auth_router.post("/verify-email", response_model=TokenResponse)
-async def verify_email(request: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
-    user = (
-        await db.execute(select(User).where(User.verification_token == request.token))
-    ).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification link.")
-    user.email_verified = True
-    user.verification_token = None
-    await db.commit()
-    access_token = create_access_token(data={"sub": user.username})
-    return TokenResponse(access_token=access_token, email_verified=True)
-
-
-@auth_router.post("/resend-verification")
-async def resend_verification(request: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
-    user = (
-        await db.execute(select(User).where(User.email == request.email))
-    ).scalar_one_or_none()
-    if not user or user.email_verified:
-        # Don't reveal whether an email is registered
-        return {"message": "If that address is registered and unverified, a new link has been sent."}
-    token = secrets.token_urlsafe(32)
-    user.verification_token = token
-    await db.commit()
-    send_verification_email(user.email, user.username, token)
-    return {"message": "Verification email sent."}
+    return TokenResponse(access_token=access_token)
 
 
 @auth_router.get("/check")

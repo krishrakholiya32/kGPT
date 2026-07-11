@@ -91,21 +91,6 @@ export async function apiRegister(username: string, email: string, password: str
   })
 }
 
-export async function apiVerifyEmail(token: string): Promise<Response> {
-  return fetch(`${API}/api/auth/verify-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token }),
-  })
-}
-
-export async function apiResendVerification(email: string): Promise<Response> {
-  return fetch(`${API}/api/auth/resend-verification`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email }),
-  })
-}
 
 export interface CheckResult {
   username?: { valid_format: boolean; taken: boolean }

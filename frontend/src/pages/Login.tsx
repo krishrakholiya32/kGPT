@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { apiLogin, apiRegister, apiResendVerification, apiCheck, extractError } from '../api/client'
+import { apiLogin, apiRegister, apiCheck, extractError } from '../api/client'
 
 type Tab = 'login' | 'register'
-type View = 'form' | 'verify'
 interface Hint {
   state: '' | 'ok' | 'error' | 'loading'
   msg: string
@@ -19,9 +18,7 @@ export default function Login() {
   const { token, saveToken } = useAuth()
 
   const [tab, setTab] = useState<Tab>('login')
-  const [view, setView] = useState<View>('form')
   const [error, setError] = useState('')
-  const [pendingEmail, setPendingEmail] = useState('')
 
   const [loginEmail, setLoginEmail] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
@@ -36,10 +33,6 @@ export default function Login() {
   const [hintEmail, setHintEmail] = useState<Hint>(EMPTY_HINT)
   const [hintEmailConfirm, setHintEmailConfirm] = useState<Hint>(EMPTY_HINT)
   const [hintPasswordConfirm, setHintPasswordConfirm] = useState<Hint>(EMPTY_HINT)
-
-  const [resendMsg, setResendMsg] = useState('')
-  const [resendMsgColor, setResendMsgColor] = useState('var(--text-muted)')
-  const [resendDisabled, setResendDisabled] = useState(false)
 
   // "readonly until focus" trick to block iOS autofill/privacy keyboard.
   const [activated, setActivated] = useState<Record<string, boolean>>({})
@@ -65,12 +58,6 @@ export default function Login() {
     setError('')
   }
 
-  function showVerifyPending(email: string) {
-    setPendingEmail(email)
-    setError('')
-    setView('verify')
-  }
-
   async function doLogin() {
     const email = loginEmail.trim()
     if (!email || !loginPassword) {
@@ -80,10 +67,6 @@ export default function Login() {
     try {
       const res = await apiLogin(email, loginPassword)
       const data = await res.json().catch(() => ({}))
-      if (res.status === 403) {
-        showVerifyPending(email)
-        return
-      }
       if (!res.ok) {
         setError(extractError(data, 'Login failed.'))
         return
@@ -118,32 +101,10 @@ export default function Login() {
         setError(extractError(data, 'Registration failed.'))
         return
       }
-      if (data.email_verified === false) {
-        saveToken(data.access_token)
-        showVerifyPending(email)
-      } else {
-        saveToken(data.access_token)
-        navigate('/')
-      }
+      saveToken(data.access_token)
+      navigate('/')
     } catch {
       setError('Connection error. Make sure the server is running.')
-    }
-  }
-
-  async function resendVerification() {
-    setResendDisabled(true)
-    setResendMsgColor('var(--text-muted)')
-    setResendMsg('Sending…')
-    try {
-      const res = await apiResendVerification(pendingEmail)
-      const data = await res.json().catch(() => ({}))
-      setResendMsgColor('#4caf50')
-      setResendMsg(data.message || 'Sent! Check your inbox.')
-    } catch {
-      setResendMsgColor('#ef5350')
-      setResendMsg('Failed to send. Please try again.')
-    } finally {
-      setTimeout(() => setResendDisabled(false), 30000)
     }
   }
 
@@ -216,7 +177,6 @@ export default function Login() {
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key !== 'Enter') return
-    if (view === 'verify') return
     if (tab === 'login') doLogin()
     else doRegister()
   }
@@ -229,9 +189,7 @@ export default function Login() {
           <p>Your Private AI Assistant</p>
         </div>
 
-        {view === 'form' && (
-          <>
-            <div className="auth-tabs">
+        <div className="auth-tabs">
               <div className={`auth-tab${tab === 'login' ? ' active' : ''}`} onClick={() => switchTab('login')}>
                 Login
               </div>
@@ -366,37 +324,6 @@ export default function Login() {
                 </button>
               </div>
             )}
-          </>
-        )}
-
-        {view === 'verify' && (
-          <div className="verify-pending">
-            <div className="verify-icon">📧</div>
-            <h2>Check your inbox</h2>
-            <p>We sent a verification link to:</p>
-            <span className="verify-email-addr">{pendingEmail}</span>
-            <p>
-              Click the link in the email to activate your account.
-              <br />
-              The link expires in 24 hours.
-            </p>
-            <button className="resend-btn" disabled={resendDisabled} onClick={resendVerification}>
-              Resend verification email
-            </button>
-            <div className="resend-msg" style={{ color: resendMsgColor }}>
-              {resendMsg}
-            </div>
-            <span
-              className="back-link"
-              onClick={() => {
-                setView('form')
-                switchTab('login')
-              }}
-            >
-              ← Back to login
-            </span>
-          </div>
-        )}
       </div>
     </div>
   )
