@@ -6,9 +6,12 @@ Groq vision fallback — same provider order as the main chat LLM).
 import base64
 import os
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
+
+from backend.agent.llm import _all_gemini_keys, _all_groq_keys
 
 IMAGE_DESCRIBE_PROMPT = (
     "Describe everything visible in this image in full detail — "
@@ -51,17 +54,27 @@ def _extract_image(data: bytes, ext: str) -> str:
     mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
     b64 = base64.b64encode(data).decode()
 
-    gemini_key = os.getenv("GEMINI_API_KEY", "")
-    if gemini_key:
+    # Rotate through every configured key (not just the first) for both
+    # providers, same resilience the main chat LLM gets in llm.py — a single
+    # rate-limited/revoked key shouldn't fail file-upload descriptions outright.
+    last_exc: Optional[Exception] = None
+    for key in _all_gemini_keys():
         try:
-            return _gemini_vision(b64, mime, gemini_key)
+            return _gemini_vision(b64, mime, key)
         except Exception as exc:
-            print(f"[kGPT] Gemini vision failed, falling back to Groq: {exc}")
+            last_exc = exc
+            print(f"[kGPT] Gemini vision key ...{key[-6:]} failed, trying next: {exc}")
 
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    if not groq_key:
-        raise ValueError("Neither GEMINI_API_KEY nor GROQ_API_KEY is set — cannot describe image content.")
-    return _groq_vision(b64, mime, groq_key)
+    for key in _all_groq_keys():
+        try:
+            return _groq_vision(b64, mime, key)
+        except Exception as exc:
+            last_exc = exc
+            print(f"[kGPT] Groq vision key ...{key[-6:]} failed, trying next: {exc}")
+
+    if last_exc is not None:
+        raise ValueError(f"All configured vision providers failed to describe the image: {last_exc}")
+    raise ValueError("Neither GEMINI_API_KEY(S) nor GROQ_API_KEY(S) is set — cannot describe image content.")
 
 
 def _gemini_vision(b64: str, mime: str, key: str) -> str:

@@ -161,18 +161,25 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    verification_token = secrets.token_urlsafe(32)
     new_user = User(
         username=request.username,
         email=request.email,
         password_hash=hash_password(request.password),
-        email_verified=True,
+        email_verified=False,
+        verification_token=verification_token,
     )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
 
+    send_verification_email(new_user.email, new_user.username, verification_token)
+
+    # Soft gate: the user is logged in immediately (matches the frontend's
+    # existing "check your inbox" pending screen for email_verified=False),
+    # verification is a follow-up nudge, not a login block.
     access_token = create_access_token(data={"sub": new_user.username})
-    return TokenResponse(access_token=access_token, email_verified=True)
+    return TokenResponse(access_token=access_token, email_verified=False)
 
 
 @auth_router.post("/login", response_model=TokenResponse)
@@ -191,7 +198,7 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token = create_access_token(data={"sub": user.username})
-    return TokenResponse(access_token=access_token)
+    return TokenResponse(access_token=access_token, email_verified=user.email_verified)
 
 
 @auth_router.post("/verify-email", response_model=TokenResponse)
