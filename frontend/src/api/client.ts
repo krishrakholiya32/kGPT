@@ -40,6 +40,16 @@ export interface Message {
   content: string
   mode: string | null
   timestamp: string | null
+  sources?: string[] | null
+}
+
+export interface KnowledgeDoc {
+  id: number
+  filename: string
+  status: string
+  error_message: string | null
+  chunk_count: number | null
+  created_at: string
 }
 
 export interface CurrentUser {
@@ -171,6 +181,34 @@ export async function uploadAttachment(convId: number, file: File): Promise<Resp
     headers: { Authorization: `Bearer ${getToken()}` },
     body: formData,
   })
+}
+
+// ── Document knowledge base (RAG) ───────────────────────────────────────────
+
+export async function uploadDocument(file: File): Promise<Response> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return fetch(`${API}/api/documents/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+    body: formData,
+  })
+}
+
+export async function listDocuments(): Promise<KnowledgeDoc[]> {
+  const res = await fetch(`${API}/api/documents`, { headers: authHeaders() })
+  if (!res.ok) throw new Error('failed to list documents')
+  const data = await res.json()
+  return data.documents
+}
+
+export async function deleteDocument(id: number): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/api/documents/${id}`, { method: 'DELETE', headers: authHeaders() })
+    return res.ok
+  } catch {
+    return false
+  }
 }
 
 // ── Chat ─────────────────────────────────────────────────────────────────────

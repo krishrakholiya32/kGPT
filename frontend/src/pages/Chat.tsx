@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ArtifactProvider } from '../components/Artifact'
+import DocumentPanel from '../components/DocumentPanel'
 import Markdown from '../components/Markdown'
 import { showToast } from '../components/Toast'
 import { copyToClipboard } from '../lib/clipboard'
@@ -14,6 +15,7 @@ interface Item {
   role: Role
   content: string
   mode: string | null
+  sources?: string[] | null
 }
 
 let _uid = 0
@@ -36,6 +38,7 @@ export default function Chat() {
   const [light, setLight] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarTab, setSidebarTab] = useState<'chats' | 'documents'>('chats')
   const [input, setInput] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editingValue, setEditingValue] = useState('')
@@ -174,9 +177,9 @@ export default function Chat() {
   function addSystemNote(text: string) {
     setItems((prev) => [...prev, { uid: nextUid(), role: 'system', content: text, mode: null }])
   }
-  function appendMessage(role: Role, content: string, mode: string | null = null) {
+  function appendMessage(role: Role, content: string, mode: string | null = null, sources: string[] | null = null) {
     if (role === 'user') lastUserMessageRef.current = content
-    setItems((prev) => [...prev, { uid: nextUid(), role, content, mode }])
+    setItems((prev) => [...prev, { uid: nextUid(), role, content, mode, sources }])
   }
 
   // ── Conversations ────────────────────────────────────────────────────────────
@@ -239,7 +242,9 @@ export default function Chat() {
           mode: null,
         })
       }
-      for (const m of msgs) next.push({ uid: nextUid(), role: m.role as Role, content: m.content, mode: m.mode })
+      for (const m of msgs) {
+        next.push({ uid: nextUid(), role: m.role as Role, content: m.content, mode: m.mode, sources: m.sources })
+      }
       hasMessagesRef.current = msgs.length > 0
       if (msgs.length) lastUserMessageRef.current = [...msgs].reverse().find((m) => m.role === 'user')?.content ?? null
       setItems(next)
@@ -334,6 +339,11 @@ export default function Chat() {
     if (uid == null) return
     setItems((prev) => prev.map((it) => (it.uid === uid ? { ...it, content: text } : it)))
   }
+  function setAssistantSources(sources: string[]) {
+    const uid = assistantUidRef.current
+    if (uid == null || !sources.length) return
+    setItems((prev) => prev.map((it) => (it.uid === uid ? { ...it, sources } : it)))
+  }
 
   async function streamAnswer(message: string): Promise<boolean> {
     let res: Response
@@ -372,7 +382,14 @@ export default function Chat() {
         for (const part of parts) {
           const line = part.trim()
           if (!line.startsWith('data:')) continue
-          let evt: { type: string; mode?: string; conversation_id?: number; text?: string; message?: string }
+          let evt: {
+            type: string
+            mode?: string
+            conversation_id?: number
+            text?: string
+            message?: string
+            sources?: string[]
+          }
           try {
             evt = JSON.parse(line.slice(5).trim())
           } catch {
@@ -393,6 +410,8 @@ export default function Chat() {
             rawRef.current += evt.text || ''
             updateAssistantContent(rawRef.current)
             scrollChat()
+          } else if (evt.type === 'done') {
+            if (evt.sources && evt.sources.length) setAssistantSources(evt.sources)
           } else if (evt.type === 'error') {
             if (!started) return false
             rawRef.current += (rawRef.current ? '\n\n' : '') + 'Error: ' + (evt.message || 'something went wrong')
@@ -412,7 +431,7 @@ export default function Chat() {
       const res = await api.sendChat({ message, mode: 'auto', conversation_id: convIdRef.current })
       const data = await res.json()
       setTyping(false)
-      if (res.ok) appendMessage('assistant', data.response, data.mode)
+      if (res.ok) appendMessage('assistant', data.response, data.mode, data.sources || null)
       else appendMessage('assistant', `Error: ${data.detail || 'Something went wrong.'}`)
     } catch {
       setTyping(false)
@@ -576,6 +595,24 @@ export default function Chat() {
             </button>
           </div>
 
+          <div className="sidebar-tabs">
+            <div
+              className={`sidebar-tab${sidebarTab === 'chats' ? ' active' : ''}`}
+              onClick={() => setSidebarTab('chats')}
+            >
+              Chats
+            </div>
+            <div
+              className={`sidebar-tab${sidebarTab === 'documents' ? ' active' : ''}`}
+              onClick={() => setSidebarTab('documents')}
+            >
+              Documents
+            </div>
+          </div>
+
+          {sidebarTab === 'documents' ? (
+            <DocumentPanel />
+          ) : (
           <div className="conv-list">
             {conversations.map((c) => (
               <div
@@ -632,6 +669,7 @@ export default function Chat() {
               </div>
             ))}
           </div>
+          )}
 
           <div className="sidebar-bottom">
             <div className="user-info">
@@ -797,6 +835,7 @@ function MessageItem({
   const [time] = useState(nowTime)
   const isUser = item.role === 'user'
   const showBadge = item.role === 'assistant' && item.mode === 'web'
+  const sourceCount = item.sources?.length || 0
 
   return (
     <div className={`message ${item.role}`}>
@@ -806,6 +845,11 @@ function MessageItem({
           {showBadge && (
             <div className="tool-badge">
               <span>🌐</span> Web Search
+            </div>
+          )}
+          {sourceCount > 0 && (
+            <div className="tool-badge" title={item.sources?.join(', ')}>
+              <span>📚</span> Used {sourceCount} source{sourceCount === 1 ? '' : 's'}
             </div>
           )}
           {isUser ? (
