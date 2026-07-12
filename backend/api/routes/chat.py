@@ -98,13 +98,14 @@ async def classify_query(query: str, llm) -> str:
         return "general"
 
 
-def _save_message(db, user_id, role, content, mode, conversation_id=None):
+def _save_message(db, user_id, role, content, mode, conversation_id=None, sources=None):
     msg = ChatMessage(
         user_id=user_id,
         conversation_id=conversation_id,
         role=role,
         content=content,
         mode=mode,
+        sources=json.dumps(sources) if sources else None,
         timestamp=datetime.now(timezone.utc),
     )
     db.add(msg)
@@ -204,11 +205,12 @@ async def _resolve_search_query(llm, user_message, history_text):
 
 
 async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
-    """Execute a single mode with the given LLM and return the response text."""
+    """Execute a single mode with the given LLM. Returns (response_text, sources)."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
-    doc_ctx, _doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
-    mem_ctx, _mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
+    doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
+    mem_ctx, mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
+    sources = doc_sources + mem_sources
 
     if mode == "general":
         parts = []
@@ -221,7 +223,7 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
         if history_text:
             parts.append(f"Previous conversation:\n{history_text}")
         parts.append(f"User: {user_message}\nAssistant:")
-        return await llm.ainvoke("\n".join(parts))
+        return await llm.ainvoke("\n".join(parts)), sources
 
     if mode == "web":
         search_query = await _resolve_search_query(llm, user_message, history_text)
@@ -234,17 +236,20 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
             f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
             f"Search Results:\n{search_results}\n\nAnswer:"
         )
-        return await llm.ainvoke(summary_prompt)
+        return await llm.ainvoke(summary_prompt), sources
 
-    return f"Unknown mode '{mode}'. Supported: general, web."
+    return f"Unknown mode '{mode}'. Supported: general, web.", []
 
 
 async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
-    """Return a text prompt for the given mode (general or web), else None."""
+    """Return (prompt_or_tuple, sources) for the given mode (general or web).
+    prompt_or_tuple is None if mode is unrecognized; for web mode it's a
+    ("__web__", ...) tuple the caller finishes building after a web search."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
-    doc_ctx, _doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
-    mem_ctx, _mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
+    doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
+    mem_ctx, mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
+    sources = doc_sources + mem_sources
 
     if mode == "general":
         parts = []
@@ -257,10 +262,10 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
         if history_text:
             parts.append(f"Previous conversation:\n{history_text}")
         parts.append(f"User: {user_message}\nAssistant:")
-        return "\n".join(parts)
+        return "\n".join(parts), sources
     if mode == "web":
-        return ("__web__", user_message, history_text, ctx, doc_ctx, mem_ctx)
-    return None
+        return ("__web__", user_message, history_text, ctx, doc_ctx, mem_ctx), sources
+    return None, []
 
 
 def _record_memory_safe(user_id, conversation_id, message_id, user_message, answer):
@@ -277,14 +282,16 @@ def _record_memory_safe(user_id, conversation_id, message_id, user_message, answ
     asyncio.create_task(_do())
 
 
-async def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None):
+async def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None, sources=None):
     """Save a user/assistant exchange using a fresh async DB session (safe during streaming).
     Always saves the user message; saves assistant reply only if answer is non-empty."""
     async with AsyncSessionLocal() as db:
         _save_message(db, user_id, "user", user_message, mode, conversation_id)
         assistant_msg = None
         if answer:
-            assistant_msg = _save_message(db, user_id, "assistant", answer, mode, conversation_id)
+            assistant_msg = _save_message(
+                db, user_id, "assistant", answer, mode, conversation_id, sources=sources
+            )
         if conversation_id:
             conv = (
                 await db.execute(select(Conversation).where(Conversation.id == conversation_id))
@@ -312,6 +319,7 @@ async def chat(
 
     providers = candidate_providers()
     response_text = None
+    response_sources: list[str] = []
     final_mode = requested_mode if requested_mode != "auto" else "general"
     used_provider = None
     last_error = None
@@ -324,7 +332,9 @@ async def chat(
                 if requested_mode == "auto"
                 else requested_mode
             )
-            response_text = await _run_mode(llm, mode, user_message, db, current_user.id, conv_id)
+            response_text, response_sources = await _run_mode(
+                llm, mode, user_message, db, current_user.id, conv_id
+            )
             final_mode = mode
             used_provider = provider
             break
@@ -343,11 +353,13 @@ async def chat(
         print(f"[kGPT] answered mode={final_mode} provider={used_provider}")
 
     _save_message(db, current_user.id, "user", user_message, final_mode, conv_id)
-    assistant_msg = _save_message(db, current_user.id, "assistant", response_text, final_mode, conv_id)
+    assistant_msg = _save_message(
+        db, current_user.id, "assistant", response_text, final_mode, conv_id, sources=response_sources
+    )
     conv.updated_at = datetime.now(timezone.utc)
     await db.commit()
     _record_memory_safe(current_user.id, conv_id, assistant_msg.id, user_message, response_text)
-    return ChatResponse(response=response_text, mode=final_mode)
+    return ChatResponse(response=response_text, mode=final_mode, sources=response_sources)
 
 
 @chat_router.post("/stream")
@@ -402,10 +414,11 @@ async def chat_stream(
     async def event_stream():
         collected = []
         user_msg_saved = False
+        sources: list[str] = []
         try:
             yield sse({"type": "meta", "mode": mode, "provider": chosen, "conversation_id": conv_id})
             async with AsyncSessionLocal() as _db:
-                text_prompt = await _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
+                text_prompt, sources = await _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
 
             if isinstance(text_prompt, tuple):
                 _, _msg, _hist, _ctx, _doc_ctx, _mem_ctx = text_prompt
@@ -436,10 +449,10 @@ async def chat_stream(
                         yield sse({"type": "chunk", "text": piece})
             else:
                 async with AsyncSessionLocal() as _db2:
-                    text = await _run_mode(llm, mode, user_message, _db2, current_user.id, conv_id)
+                    text, sources = await _run_mode(llm, mode, user_message, _db2, current_user.id, conv_id)
                 collected.append(text)
                 yield sse({"type": "chunk", "text": text})
-            yield sse({"type": "done"})
+            yield sse({"type": "done", "sources": sources})
         except asyncio.CancelledError:
             pass
         except GeneratorExit:
@@ -455,7 +468,9 @@ async def chat_stream(
                     # User message already saved; only persist the assistant reply.
                     if answer:
                         async with AsyncSessionLocal() as _adb:
-                            _assistant_msg = _save_message(_adb, current_user.id, "assistant", answer, mode, conv_id)
+                            _assistant_msg = _save_message(
+                                _adb, current_user.id, "assistant", answer, mode, conv_id, sources=sources
+                            )
                             if conv_id:
                                 _conv = (
                                     await _adb.execute(
@@ -470,7 +485,7 @@ async def chat_stream(
                             )
                 else:
                     # User message wasn't saved yet (error before that point); save both.
-                    await _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
+                    await _persist_exchange(current_user.id, user_message, answer, mode, conv_id, sources=sources)
             except Exception:
                 traceback.print_exc()
             print(f"[kGPT] streamed mode={mode} provider={chosen}")
@@ -661,6 +676,7 @@ async def conversation_messages(
             "content": m.content,
             "mode": m.mode,
             "timestamp": m.timestamp.isoformat() if m.timestamp else None,
+            "sources": m.get_sources_list(),
         }
         for m in msgs
     ]
