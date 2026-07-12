@@ -259,6 +259,59 @@ async def _migrate_memory_fk_ondelete() -> None:
         await conn.run_sync(_do)
 
 
+async def _migrate_document_scope() -> None:
+    """Add documents.conversation_id (nullable, ON DELETE CASCADE) for the
+    unified upload flow, and fix document_chunks.document_id's FK to CASCADE
+    too — same reasoning and same Base.metadata.create_all limitation as
+    _migrate_memory_fk_ondelete(): an already-existing table needs an explicit
+    ALTER, create_all only sets constraint behavior on tables it creates fresh.
+    Safe to run repeatedly."""
+    from sqlalchemy import text, inspect
+
+    def _do(conn) -> None:
+        insp = inspect(conn)
+        if "documents" not in insp.get_table_names():
+            return
+
+        cols = [c["name"] for c in insp.get_columns("documents")]
+        if "conversation_id" not in cols:
+            conn.execute(text(
+                "ALTER TABLE documents ADD COLUMN conversation_id INTEGER "
+                "REFERENCES conversations(id) ON DELETE CASCADE"
+            ))
+            conn.execute(text(
+                "CREATE INDEX idx_documents_conversation ON documents(conversation_id)"
+            ))
+        else:
+            rule = conn.execute(text(
+                "SELECT confdeltype FROM pg_constraint WHERE conname = 'documents_conversation_id_fkey'"
+            )).scalar()
+            if rule is not None and rule != "c":  # 'c' = CASCADE
+                conn.execute(text(
+                    "ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_conversation_id_fkey"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE documents ADD CONSTRAINT documents_conversation_id_fkey "
+                    "FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE"
+                ))
+
+        if "document_chunks" in insp.get_table_names():
+            rule = conn.execute(text(
+                "SELECT confdeltype FROM pg_constraint WHERE conname = 'document_chunks_document_id_fkey'"
+            )).scalar()
+            if rule is not None and rule != "c":
+                conn.execute(text(
+                    "ALTER TABLE document_chunks DROP CONSTRAINT IF EXISTS document_chunks_document_id_fkey"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE document_chunks ADD CONSTRAINT document_chunks_document_id_fkey "
+                    "FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE"
+                ))
+
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
+
+
 async def _ensure_vector_extension() -> None:
     """Enable the pgvector extension. Must run BEFORE Base.metadata.create_all —
     the Document/DocumentChunk/MemoryEmbedding models declare `vector(384)`
@@ -337,3 +390,8 @@ async def init_db() -> None:
         await _migrate_memory_fk_ondelete()
     except Exception as exc:
         print(f"[kGPT] memory FK migration skipped: {exc}")
+
+    try:
+        await _migrate_document_scope()
+    except Exception as exc:
+        print(f"[kGPT] document scope migration skipped: {exc}")

@@ -23,6 +23,14 @@ class Document(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # NULL = global, available in every conversation. Set = scoped to just that
+    # one conversation. CASCADE (not SET NULL like memory_embeddings): a
+    # chat-scoped document's entire reason for existing is that one
+    # conversation — if it's deleted, silently promoting the document to
+    # global would be wrong, so it's deleted too.
+    conversation_id = Column(
+        Integer, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     filename = Column(String(255), nullable=False)
     status = Column(String(20), nullable=False, default="processing")  # processing|ready|failed
     error_message = Column(Text, nullable=True)
@@ -43,7 +51,11 @@ class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False, index=True)
+    # CASCADE: a chunk is meaningless without its parent Document, and once
+    # Document.conversation_id can cascade-delete via a conversation, this
+    # must cascade too or the delete fails (ForeignKeyViolationError) —
+    # same class of bug already hit and fixed once for memory_embeddings.
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     # Denormalized so retrieval queries can filter by user_id without a join.
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     chunk_index = Column(Integer, nullable=False)
@@ -82,6 +94,8 @@ class DocumentOut(BaseModel):
     error_message: Optional[str] = None
     chunk_count: Optional[int] = None
     created_at: datetime
+    conversation_id: Optional[int] = None
+    conversation_title: Optional[str] = None  # populated by the list endpoint via a join
 
     class Config:
         from_attributes = True
