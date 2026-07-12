@@ -10,9 +10,13 @@ const STATUS_LABEL: Record<string, string> = {
 
 interface Props {
   currentConversationId?: number | null
+  // Lets Chat.tsx know a doc was scoped to the open conversation, so its
+  // empty-conversation auto-cleanup doesn't delete it right back out from
+  // under the user.
+  onChatScopedUpload?: () => void
 }
 
-export default function DocumentPanel({ currentConversationId }: Props) {
+export default function DocumentPanel({ currentConversationId, onChatScopedUpload }: Props) {
   const [docs, setDocs] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(true)
   // Defaults to "all" — matches this tab's existing global framing. The
@@ -70,6 +74,7 @@ export default function DocumentPanel({ currentConversationId }: Props) {
           conversationId ? `${file.name} uploaded — this chat only` : `${file.name} uploaded — processing…`,
           'success',
         )
+        if (conversationId) onChatScopedUpload?.()
         refresh()
       } catch {
         showToast(`Failed to upload ${file.name}`, 'error')
@@ -77,6 +82,14 @@ export default function DocumentPanel({ currentConversationId }: Props) {
     }
     e.target.value = ''
   }
+
+  // The scope toggle used to only steer where new uploads landed while the
+  // list below always showed everything — confusing, since it looked like a
+  // filter. It now actually filters: "All chats" shows only global docs,
+  // "This chat only" shows only docs scoped to the open conversation.
+  const visibleDocs = docs.filter((d) =>
+    scope === 'all' ? d.conversation_id == null : d.conversation_id === currentConversationId,
+  )
 
   async function handleDelete(id: number, filename: string) {
     const ok = await deleteDocument(id)
@@ -119,14 +132,15 @@ export default function DocumentPanel({ currentConversationId }: Props) {
       </button>
 
       {loading && <div className="doc-empty-hint">Loading…</div>}
-      {!loading && docs.length === 0 && (
+      {!loading && visibleDocs.length === 0 && (
         <div className="doc-empty-hint">
-          No documents yet. Upload one to let kGPT answer questions using its content — available in every chat, or
-          scope it to just this one.
+          {scope === 'all'
+            ? 'No documents available in every chat yet. Upload one here, or switch to "This chat only" to see documents scoped to this conversation.'
+            : 'No documents scoped to this chat yet. Upload one here, or switch to "All chats" to see your global documents.'}
         </div>
       )}
 
-      {docs.map((d) => (
+      {visibleDocs.map((d) => (
         <div key={d.id} className="conv-item doc-item">
           <span className="conv-title" title={d.error_message || undefined}>
             {d.filename}

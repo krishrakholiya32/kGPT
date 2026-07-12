@@ -32,6 +32,7 @@ export interface Conversation {
   attachment_name: string | null
   message_count: number
   attachment_names: string[]
+  document_count: number
 }
 
 export interface Message {

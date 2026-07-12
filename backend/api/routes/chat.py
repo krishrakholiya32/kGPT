@@ -26,6 +26,7 @@ from backend.agent.llm import build_llm, candidate_providers
 from backend.agent.tools import run_web_search
 from backend.api.auth import get_current_user
 from backend.api.models.chat import ChatMessage, ChatRequest, ChatResponse, Conversation, ConversationAttachment
+from backend.api.models.knowledge import Document
 from backend.api.models.user import User
 from backend.database.db import get_db, AsyncSessionLocal
 
@@ -487,6 +488,7 @@ async def list_conversations(
     conv_ids = [c.id for c in convs]
     count_map: dict[int, int] = {}
     att_map: dict[int, list] = {}
+    doc_count_map: dict[int, int] = {}
     if conv_ids:
         msg_rows = (
             await db.execute(
@@ -505,6 +507,14 @@ async def list_conversations(
         ).all()
         for cid, fname in att_rows:
             att_map.setdefault(cid, []).append(fname)
+        doc_rows = (
+            await db.execute(
+                select(Document.conversation_id, func.count(Document.id))
+                .where(Document.conversation_id.in_(conv_ids))
+                .group_by(Document.conversation_id)
+            )
+        ).all()
+        doc_count_map = {cid: cnt for cid, cnt in doc_rows}
     result = []
     for c in convs:
         names = att_map.get(c.id, [])
@@ -514,6 +524,7 @@ async def list_conversations(
             **_conv_dict(c),
             "message_count": count_map.get(c.id, 0),
             "attachment_names": names,
+            "document_count": doc_count_map.get(c.id, 0),
         })
     return result
 
@@ -527,7 +538,7 @@ async def create_conversation(
     db.add(conv)
     await db.commit()
     await db.refresh(conv)
-    return {**_conv_dict(conv), "message_count": 0, "attachment_names": []}
+    return {**_conv_dict(conv), "message_count": 0, "attachment_names": [], "document_count": 0}
 
 
 @chat_router.get("/conversations/{conv_id}/messages")

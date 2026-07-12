@@ -48,6 +48,10 @@ export default function Chat() {
   // callbacks always read current values.
   const convIdRef = useRef<number | null>(null)
   const hasMessagesRef = useRef(false)
+  // Tracks whether the current conversation has a chat-scoped document, so the
+  // empty-conversation auto-cleanup below doesn't sweep it away (and cascade-
+  // delete the document with it) just because no chat messages were sent yet.
+  const hasDocumentRef = useRef(false)
   const uploadInProgressRef = useRef(false)
   const isLoadingRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -186,13 +190,13 @@ export default function Chat() {
   async function loadConversations() {
     try {
       let convs = await api.listConversations()
-      const empties = convs.filter(
-        (c) => (c.message_count || 0) === 0 && !(c.attachment_names && c.attachment_names.length),
-      )
+      const isEmpty = (c: Conversation) =>
+        (c.message_count || 0) === 0 &&
+        !(c.attachment_names && c.attachment_names.length) &&
+        !c.document_count
+      const empties = convs.filter(isEmpty)
       await Promise.all(empties.map((c) => api.deleteConversationSilent(c.id)))
-      convs = convs.filter(
-        (c) => (c.message_count || 0) > 0 || (c.attachment_names && c.attachment_names.length),
-      )
+      convs = convs.filter((c) => !isEmpty(c))
 
       const savedId = parseInt(sessionStorage.getItem('kgpt_conv') || '0')
       const savedConv = savedId ? convs.find((c) => c.id === savedId) : null
@@ -202,6 +206,7 @@ export default function Chat() {
         conversationsRef.current = convs
         setConv(savedId)
         hasMessagesRef.current = (savedConv.message_count || 0) > 0
+        hasDocumentRef.current = (savedConv.document_count || 0) > 0
         await loadConversationMessages(savedId)
       } else {
         const fresh = await api.createConversation()
@@ -210,6 +215,7 @@ export default function Chat() {
         conversationsRef.current = convs
         setConv(fresh ? fresh.id : convs[0] ? convs[0].id : null)
         hasMessagesRef.current = false
+        hasDocumentRef.current = false
         setItems([])
       }
     } catch {
@@ -244,6 +250,7 @@ export default function Chat() {
         next.push({ uid: nextUid(), role: m.role as Role, content: m.content, mode: m.mode, sources: m.sources })
       }
       hasMessagesRef.current = msgs.length > 0
+      hasDocumentRef.current = (conv?.document_count || 0) > 0
       if (msgs.length) lastUserMessageRef.current = [...msgs].reverse().find((m) => m.role === 'user')?.content ?? null
       setItems(next)
     } catch {
@@ -255,7 +262,7 @@ export default function Chat() {
   async function switchConversation(id: number) {
     if (id === convIdRef.current) return
     if (isLoadingRef.current) stopGenerating()
-    if (convIdRef.current && !hasMessagesRef.current) {
+    if (convIdRef.current && !hasMessagesRef.current && !hasDocumentRef.current) {
       await api.deleteConversationSilent(convIdRef.current)
       const filtered = conversationsRef.current.filter((c) => c.id !== convIdRef.current)
       setConversations(filtered)
@@ -263,13 +270,14 @@ export default function Chat() {
     }
     setConv(id)
     hasMessagesRef.current = false
+    hasDocumentRef.current = false
     saveConvSession(id)
     closeSidebar()
     await loadConversationMessages(id)
   }
 
   async function newConversation() {
-    if (convIdRef.current && !hasMessagesRef.current) {
+    if (convIdRef.current && !hasMessagesRef.current && !hasDocumentRef.current) {
       await api.deleteConversationSilent(convIdRef.current)
       const filtered = conversationsRef.current.filter((c) => c.id !== convIdRef.current)
       setConversations(filtered)
@@ -282,6 +290,7 @@ export default function Chat() {
     }
     setConv(c.id)
     hasMessagesRef.current = false
+    hasDocumentRef.current = false
     saveConvSession(null)
     const next = [c, ...conversationsRef.current]
     setConversations(next)
@@ -546,6 +555,7 @@ export default function Chat() {
           continue
         }
         const data = await res.json()
+        if (conversationId) hasDocumentRef.current = true
         addSystemNote(
           conversationId
             ? `📎 ${data.filename} uploaded — available in this conversation only, while it exists.`
@@ -614,7 +624,10 @@ export default function Chat() {
           </div>
 
           {sidebarTab === 'documents' ? (
-            <DocumentPanel currentConversationId={currentConversationId} />
+            <DocumentPanel
+              currentConversationId={currentConversationId}
+              onChatScopedUpload={() => { hasDocumentRef.current = true }}
+            />
           ) : (
           <div className="conv-list">
             {conversations.map((c) => (
