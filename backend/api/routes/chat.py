@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.agent import retrieval
 from backend.agent.llm import build_llm, candidate_providers
 from backend.agent.tools import run_web_search
 from backend.api.auth import get_current_user
@@ -206,9 +207,12 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM and return the response text."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
+    doc_ctx, _doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
 
     if mode == "general":
         parts = []
+        if doc_ctx:
+            parts.append(doc_ctx)
         if ctx:
             parts.append(ctx)
         if history_text:
@@ -220,6 +224,7 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
         search_query = await _resolve_search_query(llm, user_message, history_text)
         search_results = await asyncio.to_thread(run_web_search, search_query)
         summary_prompt = (
+            (doc_ctx if doc_ctx else "") +
             (ctx if ctx else "") +
             (f"Previous conversation:\n{history_text}\n" if history_text else "") +
             f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
@@ -234,9 +239,12 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     """Return a text prompt for the given mode (general or web), else None."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
+    doc_ctx, _doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
 
     if mode == "general":
         parts = []
+        if doc_ctx:
+            parts.append(doc_ctx)
         if ctx:
             parts.append(ctx)
         if history_text:
@@ -244,7 +252,7 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
         parts.append(f"User: {user_message}\nAssistant:")
         return "\n".join(parts)
     if mode == "web":
-        return ("__web__", user_message, history_text, ctx)
+        return ("__web__", user_message, history_text, ctx, doc_ctx)
     return None
 
 
@@ -374,10 +382,11 @@ async def chat_stream(
                 text_prompt = await _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
 
             if isinstance(text_prompt, tuple):
-                _, _msg, _hist, _ctx = text_prompt
+                _, _msg, _hist, _ctx, _doc_ctx = text_prompt
                 search_query = await _resolve_search_query(llm, _msg, _hist)
                 search_results = await asyncio.to_thread(run_web_search, search_query)
                 text_prompt = (
+                    (_doc_ctx if _doc_ctx else "") +
                     (_ctx if _ctx else "") +
                     (f"Previous conversation:\n{_hist}\n" if _hist else "") +
                     f"Based on the following web search results, answer the user's question: '{_msg}'\n\n"
