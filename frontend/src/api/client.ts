@@ -50,6 +50,8 @@ export interface KnowledgeDoc {
   error_message: string | null
   chunk_count: number | null
   created_at: string
+  conversation_id: number | null
+  conversation_title: string | null
 }
 
 export interface CurrentUser {
@@ -173,21 +175,12 @@ export async function renameConversation(id: number, title: string): Promise<boo
   }
 }
 
-export async function uploadAttachment(convId: number, file: File): Promise<Response> {
+// ── Document knowledge base (unified upload: global or scoped to one chat) ──
+
+export async function uploadDocument(file: File, conversationId?: number | null): Promise<Response> {
   const formData = new FormData()
   formData.append('file', file)
-  return fetch(`${API}/api/chat/conversations/${convId}/attachment`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${getToken()}` },
-    body: formData,
-  })
-}
-
-// ── Document knowledge base (RAG) ───────────────────────────────────────────
-
-export async function uploadDocument(file: File): Promise<Response> {
-  const formData = new FormData()
-  formData.append('file', file)
+  if (conversationId != null) formData.append('conversation_id', String(conversationId))
   return fetch(`${API}/api/documents/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },

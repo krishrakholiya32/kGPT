@@ -8,9 +8,16 @@ const STATUS_LABEL: Record<string, string> = {
   failed: 'Failed',
 }
 
-export default function DocumentPanel() {
+interface Props {
+  currentConversationId?: number | null
+}
+
+export default function DocumentPanel({ currentConversationId }: Props) {
   const [docs, setDocs] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(true)
+  // Defaults to "all" — matches this tab's existing global framing. The
+  // paperclip-in-chat entry point defaults the opposite way (see Chat.tsx).
+  const [scope, setScope] = useState<'all' | 'this'>('all')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -50,15 +57,19 @@ export default function DocumentPanel() {
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files
     if (!files || files.length === 0) return
+    const conversationId = scope === 'this' ? currentConversationId : null
     for (const file of Array.from(files)) {
       try {
-        const res = await uploadDocument(file)
+        const res = await uploadDocument(file, conversationId)
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
           showToast(data.detail || `Failed to upload ${file.name}`, 'error')
           continue
         }
-        showToast(`${file.name} uploaded — processing…`, 'success')
+        showToast(
+          conversationId ? `${file.name} uploaded — this chat only` : `${file.name} uploaded — processing…`,
+          'success',
+        )
         refresh()
       } catch {
         showToast(`Failed to upload ${file.name}`, 'error')
@@ -87,14 +98,31 @@ export default function DocumentPanel() {
         style={{ display: 'none' }}
         onChange={handleFileSelect}
       />
-      <button className="new-chat-btn" onClick={triggerUpload} title="Upload a document (jpg, png, pdf, docx, txt, md)">
-        <span className="icon">📄</span> Upload document
+
+      {currentConversationId != null && (
+        <div className="sidebar-tabs doc-scope-toggle">
+          <div className={`sidebar-tab${scope === 'all' ? ' active' : ''}`} onClick={() => setScope('all')}>
+            All chats
+          </div>
+          <div className={`sidebar-tab${scope === 'this' ? ' active' : ''}`} onClick={() => setScope('this')}>
+            This chat only
+          </div>
+        </div>
+      )}
+
+      <button
+        className="new-chat-btn"
+        onClick={triggerUpload}
+        title="Upload a document (jpg, png, pdf, docx, txt, md)"
+      >
+        <span className="icon">📄</span> Upload document{scope === 'this' ? ' (this chat)' : ''}
       </button>
 
       {loading && <div className="doc-empty-hint">Loading…</div>}
       {!loading && docs.length === 0 && (
         <div className="doc-empty-hint">
-          No documents yet. Upload one to let kGPT answer questions using its content, in any chat.
+          No documents yet. Upload one to let kGPT answer questions using its content — available in every chat, or
+          scope it to just this one.
         </div>
       )}
 
@@ -106,6 +134,10 @@ export default function DocumentPanel() {
               {' '}
               {STATUS_LABEL[d.status] || d.status}
               {d.status === 'ready' && d.chunk_count ? ` · ${d.chunk_count} chunk${d.chunk_count === 1 ? '' : 's'}` : ''}
+            </span>
+            <span className="doc-scope-badge">
+              {' '}
+              {d.conversation_id ? `· ${d.conversation_title || 'one chat'} only` : '· All chats'}
             </span>
           </span>
           <button className="conv-del" title="Delete document" onClick={() => handleDelete(d.id, d.filename)}>

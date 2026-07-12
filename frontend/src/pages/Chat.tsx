@@ -39,6 +39,7 @@ export default function Chat() {
   const [collapsed, setCollapsed] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarTab, setSidebarTab] = useState<'chats' | 'documents'>('chats')
+  const [showAttachMenu, setShowAttachMenu] = useState(false)
   const [input, setInput] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editingValue, setEditingValue] = useState('')
@@ -47,7 +48,6 @@ export default function Chat() {
   // callbacks always read current values.
   const convIdRef = useRef<number | null>(null)
   const hasMessagesRef = useRef(false)
-  const hasAttachmentRef = useRef(false)
   const uploadInProgressRef = useRef(false)
   const isLoadingRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -202,7 +202,6 @@ export default function Chat() {
         conversationsRef.current = convs
         setConv(savedId)
         hasMessagesRef.current = (savedConv.message_count || 0) > 0
-        hasAttachmentRef.current = !!(savedConv.attachment_names && savedConv.attachment_names.length)
         await loadConversationMessages(savedId)
       } else {
         const fresh = await api.createConversation()
@@ -211,7 +210,6 @@ export default function Chat() {
         conversationsRef.current = convs
         setConv(fresh ? fresh.id : convs[0] ? convs[0].id : null)
         hasMessagesRef.current = false
-        hasAttachmentRef.current = false
         setItems([])
       }
     } catch {
@@ -257,7 +255,7 @@ export default function Chat() {
   async function switchConversation(id: number) {
     if (id === convIdRef.current) return
     if (isLoadingRef.current) stopGenerating()
-    if (convIdRef.current && !hasMessagesRef.current && !hasAttachmentRef.current) {
+    if (convIdRef.current && !hasMessagesRef.current) {
       await api.deleteConversationSilent(convIdRef.current)
       const filtered = conversationsRef.current.filter((c) => c.id !== convIdRef.current)
       setConversations(filtered)
@@ -265,15 +263,13 @@ export default function Chat() {
     }
     setConv(id)
     hasMessagesRef.current = false
-    const conv = conversationsRef.current.find((c) => c.id === id)
-    hasAttachmentRef.current = !!(conv && conv.attachment_names && conv.attachment_names.length)
     saveConvSession(id)
     closeSidebar()
     await loadConversationMessages(id)
   }
 
   async function newConversation() {
-    if (convIdRef.current && !hasMessagesRef.current && !hasAttachmentRef.current) {
+    if (convIdRef.current && !hasMessagesRef.current) {
       await api.deleteConversationSilent(convIdRef.current)
       const filtered = conversationsRef.current.filter((c) => c.id !== convIdRef.current)
       setConversations(filtered)
@@ -286,7 +282,6 @@ export default function Chat() {
     }
     setConv(c.id)
     hasMessagesRef.current = false
-    hasAttachmentRef.current = false
     saveConvSession(null)
     const next = [c, ...conversationsRef.current]
     setConversations(next)
@@ -514,12 +509,23 @@ export default function Chat() {
     })
   }
 
-  // ── File attachments ─────────────────────────────────────────────────────────
+  // ── File uploads (unified: scope to this chat only, or all chats forever) ──
+  // uploadScopeRef holds the choice made in the attach-menu popover so
+  // handleFileSelect (fired by the native file dialog's onChange) knows how
+  // to scope the upload without threading it through more state.
+  const uploadScopeRef = useRef<'this' | 'all'>('this')
+
   function triggerFileInput() {
     if (!convIdRef.current) {
       showToast('Start a conversation first', 'warning')
       return
     }
+    setShowAttachMenu((v) => !v)
+  }
+
+  function pickScopeAndUpload(scope: 'this' | 'all') {
+    uploadScopeRef.current = scope
+    setShowAttachMenu(false)
     fileInputRef.current?.click()
   }
 
@@ -527,10 +533,12 @@ export default function Chat() {
     const files = Array.from(e.target.files || [])
     if (!files.length) return
     e.target.value = ''
+    const scope = uploadScopeRef.current
+    const conversationId = scope === 'this' ? (convIdRef.current as number) : null
     uploadInProgressRef.current = true
     for (const file of files) {
       try {
-        const res = await api.uploadAttachment(convIdRef.current as number, file)
+        const res = await api.uploadDocument(file, conversationId)
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
           showToast(`${file.name}: ${(data as { detail?: string }).detail || 'Upload failed'}`, 'error')
@@ -538,15 +546,10 @@ export default function Chat() {
           continue
         }
         const data = await res.json()
-        hasAttachmentRef.current = true
-        saveConvSession(convIdRef.current)
-        const cached = conversationsRef.current.find((c) => c.id === convIdRef.current)
-        if (cached) {
-          if (!cached.attachment_names) cached.attachment_names = []
-          cached.attachment_names.push(data.filename)
-        }
         addSystemNote(
-          `📎 ${data.filename} attached — ask me anything about it. Context stays active for this entire conversation.`,
+          conversationId
+            ? `📎 ${data.filename} uploaded — available in this conversation only, while it exists.`
+            : `📎 ${data.filename} uploaded — available in every conversation, from now on.`,
         )
       } catch {
         showToast(`${file.name}: upload failed`, 'error')
@@ -611,7 +614,7 @@ export default function Chat() {
           </div>
 
           {sidebarTab === 'documents' ? (
-            <DocumentPanel />
+            <DocumentPanel currentConversationId={currentConversationId} />
           ) : (
           <div className="conv-list">
             {conversations.map((c) => (
@@ -781,7 +784,25 @@ export default function Chat() {
           <div className="chat-input-area">
             <div className="input-container-centered">
               <div className="input-row">
-                <button className="attach-btn" onClick={triggerFileInput} title="Attach file (jpg, png, pdf, docx)" />
+                <div className="attach-menu-wrap">
+                  <button
+                    className="attach-btn"
+                    onClick={triggerFileInput}
+                    title="Attach file (jpg, png, pdf, docx, txt, md)"
+                  />
+                  {showAttachMenu && (
+                    <div className="attach-menu">
+                      <div className="attach-menu-item" onClick={() => pickScopeAndUpload('this')}>
+                        This chat only
+                        <small>Available only while this conversation exists</small>
+                      </div>
+                      <div className="attach-menu-item" onClick={() => pickScopeAndUpload('all')}>
+                        All chats
+                        <small>Available in every conversation, from now on</small>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div className="input-wrapper">
                   <textarea
                     ref={textareaRef}
@@ -805,7 +826,7 @@ export default function Chat() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".jpg,.jpeg,.png,.pdf,.docx"
+            accept=".jpg,.jpeg,.png,.pdf,.docx,.txt,.md"
             multiple
             style={{ display: 'none' }}
             onChange={handleFileSelect}
