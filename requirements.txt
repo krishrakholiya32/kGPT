@@ -24,10 +24,18 @@ pydantic[email]
 ddgs
 duckduckgo-search
 
-# ===== Email =====
-# (uses stdlib smtplib — no extra package needed)
-
 # ===== File attachment extraction =====
 pymupdf
 python-docx
 groq
+
+# ===== RAG / cross-conversation memory (local embeddings + pgvector) =====
+# Local sentence-transformers embeddings (not an API call) — verified on the
+# actual Oracle ARM box: ~539MB resident, ~14ms/query, well within budget.
+# CPU-only torch build (install with --extra-index-url
+# https://download.pytorch.org/whl/cpu to avoid resolving a CUDA build on
+# platforms where that matters; aarch64 Linux only publishes CPU wheels
+# anyway, so this mainly matters for reproducibility on other architectures).
+pgvector==0.5.0
+sentence-transformers>=3.0
+torch>=2.2

@@ -220,9 +220,51 @@ async def _migrate_attachment_table() -> None:
         await conn.run_sync(_do)
 
 
+async def _ensure_vector_extension() -> None:
+    """Enable the pgvector extension. Must run BEFORE Base.metadata.create_all —
+    the Document/DocumentChunk/MemoryEmbedding models declare `vector(384)`
+    columns, and create_all will fail on a database that doesn't have the
+    `vector` type registered yet. Safe to run repeatedly."""
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
+
+async def _migrate_vector_indexes() -> None:
+    """Create the HNSW vector-similarity indexes.
+
+    Must run outside any SQLAlchemy transaction — CREATE INDEX CONCURRENTLY
+    raises ActiveSqlTransaction if wrapped in one. Uses a raw asyncpg
+    connection (autocommit per-statement by default) instead of engine.begin().
+    IF NOT EXISTS makes this idempotent on its own.
+    """
+    import asyncpg
+
+    raw_url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    conn = await asyncpg.connect(raw_url)
+    try:
+        await conn.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_doc_chunks_hnsw "
+            "ON document_chunks USING hnsw (embedding vector_cosine_ops)"
+        )
+        await conn.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_mem_emb_hnsw "
+            "ON memory_embeddings USING hnsw (embedding vector_cosine_ops)"
+        )
+    finally:
+        await conn.close()
+
+
 async def init_db() -> None:
     from backend.api.models.user import User  # noqa: F401
     from backend.api.models.chat import ChatMessage, Conversation, ConversationAttachment  # noqa: F401
+    from backend.api.models.knowledge import Document, DocumentChunk, MemoryEmbedding  # noqa: F401
+
+    try:
+        await _ensure_vector_extension()
+    except Exception as exc:
+        print(f"[kGPT] vector extension setup failed: {exc}")
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -246,3 +288,8 @@ async def init_db() -> None:
         await _migrate_attachment_table()
     except Exception as exc:
         print(f"[kGPT] attachment-table migration skipped: {exc}")
+
+    try:
+        await _migrate_vector_indexes()
+    except Exception as exc:
+        print(f"[kGPT] vector index migration skipped: {exc}")
