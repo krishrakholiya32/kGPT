@@ -208,7 +208,7 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM. Returns (response_text, sources)."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
-    doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
+    doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message, conv_id)
     mem_ctx, mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
     sources = doc_sources + mem_sources
 
@@ -247,7 +247,7 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     ("__web__", ...) tuple the caller finishes building after a web search."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
-    doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
+    doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message, conv_id)
     mem_ctx, mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
     sources = doc_sources + mem_sources
 

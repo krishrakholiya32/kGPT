@@ -1,24 +1,27 @@
 """
-Document knowledge-base router for kGPT's RAG feature.
+Document knowledge-base router for kGPT's unified upload flow.
 
-Upload once, chunk + embed + store, retrieved by semantic similarity across
-any conversation (see backend/agent/retrieval.py for the retrieval side).
-Separate from the existing one-off conversation attachments
-(backend/api/routes/chat.py's /conversations/{id}/attachment) — that flow is
-untouched, this is a new, persistent, cross-conversation knowledge base.
+Upload once, chunk + embed + store, retrieved by semantic similarity.
+Documents are either global (conversation_id NULL — visible everywhere) or
+scoped to a single conversation (conversation_id set — visible only there
+plus, implicitly, alongside every global document). This single flow
+replaced the old separate one-off conversation-attachment system
+(backend/api/routes/chat.py's now-removed /conversations/{id}/attachment).
 """
 
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agent.chunker import chunk_text
 from backend.agent.embeddings import embed_texts
 from backend.api.auth import get_current_user
+from backend.api.models.chat import Conversation
 from backend.api.models.knowledge import Document, DocumentChunk, DocumentOut, DocumentListResponse
 from backend.api.models.user import User
 from backend.database.db import get_db, AsyncSessionLocal
@@ -81,6 +84,7 @@ async def _process_document(document_id: int, data: bytes, filename: str) -> Non
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    conversation_id: Optional[int] = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -95,8 +99,20 @@ async def upload_document(
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large. Max 15 MB.")
 
+    if conversation_id is not None:
+        owned = (
+            await db.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id, Conversation.user_id == current_user.id
+                )
+            )
+        ).scalar_one_or_none()
+        if owned is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
     doc = Document(
         user_id=current_user.id,
+        conversation_id=conversation_id,
         filename=file.filename,
         status="processing",
     )
@@ -113,14 +129,20 @@ async def list_documents(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    docs = (
+    rows = (
         await db.execute(
-            select(Document)
+            select(Document, Conversation.title)
+            .outerjoin(Conversation, Conversation.id == Document.conversation_id)
             .where(Document.user_id == current_user.id)
             .order_by(Document.created_at.desc())
         )
-    ).scalars().all()
-    return DocumentListResponse(documents=list(docs))
+    ).all()
+    out = []
+    for doc, conv_title in rows:
+        item = DocumentOut.model_validate(doc)
+        item.conversation_title = conv_title
+        out.append(item)
+    return DocumentListResponse(documents=out)
 
 
 @documents_router.delete("/{document_id}")

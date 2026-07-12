@@ -28,9 +28,15 @@ MEMORY_TOP_K = int(os.getenv("MEMORY_TOP_K", "5"))
 MEMORY_MAX_DISTANCE = float(os.getenv("MEMORY_MAX_DISTANCE", "0.6"))
 
 
-async def retrieve_document_context(db: AsyncSession, user_id: int, query: str) -> tuple[str, list[str]]:
+async def retrieve_document_context(
+    db: AsyncSession, user_id: int, query: str, conversation_id: int | None = None
+) -> tuple[str, list[str]]:
     """Returns (preamble_text, source_filenames). preamble_text is '' if
-    nothing relevant was found (distance threshold not met)."""
+    nothing relevant was found (distance threshold not met).
+
+    Scoping: sees this conversation's own chat-scoped documents PLUS every
+    global document (Document.conversation_id IS NULL) — never another
+    conversation's scoped documents."""
     if not query or not query.strip():
         return "", []
 
@@ -41,7 +47,11 @@ async def retrieve_document_context(db: AsyncSession, user_id: int, query: str) 
         await db.execute(
             select(DocumentChunk.content, Document.filename, distance.label("distance"))
             .join(Document, Document.id == DocumentChunk.document_id)
-            .where(DocumentChunk.user_id == user_id, Document.status == "ready")
+            .where(
+                DocumentChunk.user_id == user_id,
+                Document.status == "ready",
+                (Document.conversation_id == conversation_id) | (Document.conversation_id.is_(None)),
+            )
             .order_by(distance)
             .limit(RAG_TOP_K)
         )
