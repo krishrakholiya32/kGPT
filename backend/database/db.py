@@ -226,6 +226,39 @@ async def _migrate_attachment_table() -> None:
         await conn.run_sync(_do)
 
 
+async def _migrate_memory_fk_ondelete() -> None:
+    """Fix memory_embeddings.conversation_id/message_id FKs to ON DELETE SET
+    NULL. Base.metadata.create_all only sets constraint options on tables it
+    creates fresh — a database where memory_embeddings already exists (from
+    before this fix) keeps its original NO ACTION constraints, which broke
+    conversation deletion (ForeignKeyViolationError) once a memory referenced
+    a message in that conversation. Safe to run repeatedly: checks the
+    constraint's actual delete rule before touching it."""
+    from sqlalchemy import text, inspect
+
+    def _do(conn) -> None:
+        insp = inspect(conn)
+        if "memory_embeddings" not in insp.get_table_names():
+            return
+        for col, ref_table, fk_name in [
+            ("message_id", "chat_messages", "memory_embeddings_message_id_fkey"),
+            ("conversation_id", "conversations", "memory_embeddings_conversation_id_fkey"),
+        ]:
+            rule = conn.execute(text(
+                "SELECT confdeltype FROM pg_constraint WHERE conname = :name"
+            ), {"name": fk_name}).scalar()
+            if rule == "n":  # 'n' = SET NULL, already fixed
+                continue
+            conn.execute(text(f"ALTER TABLE memory_embeddings DROP CONSTRAINT IF EXISTS {fk_name}"))
+            conn.execute(text(
+                f"ALTER TABLE memory_embeddings ADD CONSTRAINT {fk_name} "
+                f"FOREIGN KEY ({col}) REFERENCES {ref_table}(id) ON DELETE SET NULL"
+            ))
+
+    async with engine.begin() as conn:
+        await conn.run_sync(_do)
+
+
 async def _ensure_vector_extension() -> None:
     """Enable the pgvector extension. Must run BEFORE Base.metadata.create_all —
     the Document/DocumentChunk/MemoryEmbedding models declare `vector(384)`
@@ -299,3 +332,8 @@ async def init_db() -> None:
         await _migrate_vector_indexes()
     except Exception as exc:
         print(f"[kGPT] vector index migration skipped: {exc}")
+
+    try:
+        await _migrate_memory_fk_ondelete()
+    except Exception as exc:
+        print(f"[kGPT] memory FK migration skipped: {exc}")

@@ -59,8 +59,14 @@ class MemoryEmbedding(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True, index=True)
-    message_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=True)
+    # SET NULL, not CASCADE: memory content is a self-contained string
+    # (see retrieval.record_memory), so a memory should survive its source
+    # conversation/message being deleted — that's the point of cross-
+    # conversation recall. Only the back-reference is cleared.
+    conversation_id = Column(
+        Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    message_id = Column(Integer, ForeignKey("chat_messages.id", ondelete="SET NULL"), nullable=True)
     content = Column(Text, nullable=False)
     embedding = Column(Vector(EMBEDDING_DIM), nullable=False)
     created_at = Column(
