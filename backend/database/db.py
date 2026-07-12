@@ -11,6 +11,7 @@ against a brand-new Postgres database or one that already has the columns/tables
 """
 
 import os
+from pathlib import Path
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
@@ -21,7 +22,12 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import declarative_base
 
-load_dotenv()
+# Explicit path rather than bare load_dotenv()'s frame-based auto-discovery —
+# that auto-discovery is unreliable when this module is imported directly
+# (e.g. a standalone test script) rather than via the full app import chain,
+# where some other module's load_dotenv() call happens to populate os.environ
+# first. .env lives at backend/.env; this file is at backend/database/db.py.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # Default to a local Postgres. asyncpg is the async driver.
 DATABASE_URL: str = os.getenv(

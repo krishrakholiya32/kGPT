@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.database.db import init_db
 from backend.api.auth import auth_router
 from backend.api.routes.chat import chat_router
+from backend.api.routes.documents import documents_router
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -74,6 +75,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(documents_router)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +97,7 @@ async def health_check():
 #
 # The Vite build outputs to frontend/dist. Hashed assets live under /assets and
 # are served directly; every other non-API path falls back to index.html so the
-# client-side router (react-router) can resolve /, /login, /verify, etc.
+# client-side router (react-router) can resolve /, /login, etc.
 # ---------------------------------------------------------------------------
 
 _FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
