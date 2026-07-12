@@ -14,11 +14,10 @@ import time
 import traceback
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from sqlalchemy import func, select
 
-from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,10 +30,6 @@ from backend.api.models.user import User
 from backend.database.db import get_db, AsyncSessionLocal
 
 chat_router = APIRouter(prefix="/api/chat", tags=["chat"])
-
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
-MAX_ATTACHMENTS = 10
-_ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".pdf", ".docx"}
 
 _RPM_LIMIT = 20        # max user messages per minute
 _WEEKLY_LIMIT = 1000   # max user messages per 7 days
@@ -168,28 +163,6 @@ async def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
     return lines
 
 
-async def _file_context_preamble(db, conv_id: int) -> str:
-    """Return a formatted preamble with all attached file contexts for this conversation, or ''."""
-    atts = (
-        await db.execute(
-            select(ConversationAttachment)
-            .where(ConversationAttachment.conversation_id == conv_id)
-            .order_by(ConversationAttachment.uploaded_at.asc())
-        )
-    ).scalars().all()
-    if atts:
-        parts = [f"[Attached file: {a.filename}]\n{a.context_text}" for a in atts]
-        return "\n\n".join(parts) + "\n\n"
-    # Legacy fallback for old single-attachment rows
-    conv = (
-        await db.execute(select(Conversation).where(Conversation.id == conv_id))
-    ).scalar_one_or_none()
-    if conv and conv.context:
-        name = conv.attachment_name or "attached file"
-        return f"[Attached file: {name}]\n{conv.context}\n\n"
-    return ""
-
-
 async def _resolve_search_query(llm, user_message, history_text):
     """If the message is a short follow-up, expand it into a self-contained search query."""
     if not history_text or len(user_message.split()) > 6:
@@ -207,7 +180,6 @@ async def _resolve_search_query(llm, user_message, history_text):
 async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM. Returns (response_text, sources)."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
-    ctx = await _file_context_preamble(db, conv_id)
     doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message, conv_id)
     mem_ctx, mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
     sources = doc_sources + mem_sources
@@ -218,8 +190,6 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
             parts.append(doc_ctx)
         if mem_ctx:
             parts.append(mem_ctx)
-        if ctx:
-            parts.append(ctx)
         if history_text:
             parts.append(f"Previous conversation:\n{history_text}")
         parts.append(f"User: {user_message}\nAssistant:")
@@ -231,7 +201,6 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
         summary_prompt = (
             (doc_ctx if doc_ctx else "") +
             (mem_ctx if mem_ctx else "") +
-            (ctx if ctx else "") +
             (f"Previous conversation:\n{history_text}\n" if history_text else "") +
             f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
             f"Search Results:\n{search_results}\n\nAnswer:"
@@ -246,7 +215,6 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     prompt_or_tuple is None if mode is unrecognized; for web mode it's a
     ("__web__", ...) tuple the caller finishes building after a web search."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
-    ctx = await _file_context_preamble(db, conv_id)
     doc_ctx, doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message, conv_id)
     mem_ctx, mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
     sources = doc_sources + mem_sources
@@ -257,14 +225,12 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
             parts.append(doc_ctx)
         if mem_ctx:
             parts.append(mem_ctx)
-        if ctx:
-            parts.append(ctx)
         if history_text:
             parts.append(f"Previous conversation:\n{history_text}")
         parts.append(f"User: {user_message}\nAssistant:")
         return "\n".join(parts), sources
     if mode == "web":
-        return ("__web__", user_message, history_text, ctx, doc_ctx, mem_ctx), sources
+        return ("__web__", user_message, history_text, doc_ctx, mem_ctx), sources
     return None, []
 
 
@@ -421,13 +387,12 @@ async def chat_stream(
                 text_prompt, sources = await _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
 
             if isinstance(text_prompt, tuple):
-                _, _msg, _hist, _ctx, _doc_ctx, _mem_ctx = text_prompt
+                _, _msg, _hist, _doc_ctx, _mem_ctx = text_prompt
                 search_query = await _resolve_search_query(llm, _msg, _hist)
                 search_results = await asyncio.to_thread(run_web_search, search_query)
                 text_prompt = (
                     (_doc_ctx if _doc_ctx else "") +
                     (_mem_ctx if _mem_ctx else "") +
-                    (_ctx if _ctx else "") +
                     (f"Previous conversation:\n{_hist}\n" if _hist else "") +
                     f"Based on the following web search results, answer the user's question: '{_msg}'\n\n"
                     f"Search Results:\n{search_results}\n\nAnswer:"
@@ -505,88 +470,6 @@ def _conv_dict(c):
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         "attachment_name": c.attachment_name,
     }
-
-
-@chat_router.post("/conversations/{conv_id}/attachment")
-async def upload_attachment(
-    conv_id: int,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    conv = (
-        await db.execute(
-            select(Conversation).where(
-                Conversation.id == conv_id, Conversation.user_id == current_user.id
-            )
-        )
-    ).scalar_one_or_none()
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    ext = Path(file.filename or "").suffix.lower()
-    if ext not in _ALLOWED_EXTS:
-        raise HTTPException(status_code=400, detail="Unsupported file type. Allowed: jpg, png, pdf, docx.")
-
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="File too large. Max 10 MB.")
-
-    existing_count = (
-        await db.execute(
-            select(func.count(ConversationAttachment.id)).where(
-                ConversationAttachment.conversation_id == conv_id
-            )
-        )
-    ).scalar() or 0
-    if existing_count >= MAX_ATTACHMENTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Maximum {MAX_ATTACHMENTS} files per conversation.",
-        )
-
-    try:
-        from backend.agent.file_extractor import extract_text
-        context = await asyncio.to_thread(extract_text, data, file.filename)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Could not extract file content: {exc}")
-
-    att = ConversationAttachment(
-        conversation_id=conv_id,
-        filename=file.filename,
-        context_text=context,
-    )
-    db.add(att)
-    conv.updated_at = datetime.now(timezone.utc)
-    await db.commit()
-    return {"filename": file.filename, "count": existing_count + 1}
-
-
-@chat_router.delete("/conversations/{conv_id}/attachment")
-async def delete_attachment(
-    conv_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    conv = (
-        await db.execute(
-            select(Conversation).where(
-                Conversation.id == conv_id, Conversation.user_id == current_user.id
-            )
-        )
-    ).scalar_one_or_none()
-    if conv is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    await db.execute(
-        ConversationAttachment.__table__.delete().where(
-            ConversationAttachment.conversation_id == conv_id
-        )
-    )
-    conv.context = None
-    conv.attachment_name = None
-    conv.updated_at = datetime.now(timezone.utc)
-    await db.commit()
-    return {"status": "removed"}
 
 
 @chat_router.get("/conversations")
