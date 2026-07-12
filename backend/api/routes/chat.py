@@ -208,11 +208,14 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
     doc_ctx, _doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
+    mem_ctx, _mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
 
     if mode == "general":
         parts = []
         if doc_ctx:
             parts.append(doc_ctx)
+        if mem_ctx:
+            parts.append(mem_ctx)
         if ctx:
             parts.append(ctx)
         if history_text:
@@ -225,6 +228,7 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
         search_results = await asyncio.to_thread(run_web_search, search_query)
         summary_prompt = (
             (doc_ctx if doc_ctx else "") +
+            (mem_ctx if mem_ctx else "") +
             (ctx if ctx else "") +
             (f"Previous conversation:\n{history_text}\n" if history_text else "") +
             f"Based on the following web search results, answer the user's question: '{user_message}'\n\n"
@@ -240,11 +244,14 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
     history_text = await _history_text_from_db(db, user_id, conv_id)
     ctx = await _file_context_preamble(db, conv_id)
     doc_ctx, _doc_sources = await retrieval.retrieve_document_context(db, user_id, user_message)
+    mem_ctx, _mem_sources = await retrieval.retrieve_memory_context(db, user_id, user_message, conv_id)
 
     if mode == "general":
         parts = []
         if doc_ctx:
             parts.append(doc_ctx)
+        if mem_ctx:
+            parts.append(mem_ctx)
         if ctx:
             parts.append(ctx)
         if history_text:
@@ -252,8 +259,22 @@ async def _build_stream_prompt(mode, user_message, db, user_id, conv_id):
         parts.append(f"User: {user_message}\nAssistant:")
         return "\n".join(parts)
     if mode == "web":
-        return ("__web__", user_message, history_text, ctx, doc_ctx)
+        return ("__web__", user_message, history_text, ctx, doc_ctx, mem_ctx)
     return None
+
+
+def _record_memory_safe(user_id, conversation_id, message_id, user_message, answer):
+    """Fire-and-forget: embed and store this exchange for future cross-conversation
+    retrieval. Never awaited by the caller — a slow/failed embedding must not
+    delay or break the user-facing chat response."""
+    async def _do():
+        try:
+            content = f"User: {user_message}\nAssistant: {answer}" if answer else f"User: {user_message}"
+            await retrieval.record_memory(user_id, conversation_id, message_id, content)
+        except Exception as exc:
+            print(f"[kGPT] record_memory failed (non-fatal): {exc}")
+
+    asyncio.create_task(_do())
 
 
 async def _persist_exchange(user_id, user_message, answer, mode, conversation_id=None):
@@ -261,8 +282,9 @@ async def _persist_exchange(user_id, user_message, answer, mode, conversation_id
     Always saves the user message; saves assistant reply only if answer is non-empty."""
     async with AsyncSessionLocal() as db:
         _save_message(db, user_id, "user", user_message, mode, conversation_id)
+        assistant_msg = None
         if answer:
-            _save_message(db, user_id, "assistant", answer, mode, conversation_id)
+            assistant_msg = _save_message(db, user_id, "assistant", answer, mode, conversation_id)
         if conversation_id:
             conv = (
                 await db.execute(select(Conversation).where(Conversation.id == conversation_id))
@@ -270,6 +292,9 @@ async def _persist_exchange(user_id, user_message, answer, mode, conversation_id
             if conv:
                 conv.updated_at = datetime.now(timezone.utc)
         await db.commit()
+        _record_memory_safe(
+            user_id, conversation_id, assistant_msg.id if assistant_msg else None, user_message, answer
+        )
 
 
 @chat_router.post("", response_model=ChatResponse)
@@ -318,9 +343,10 @@ async def chat(
         print(f"[kGPT] answered mode={final_mode} provider={used_provider}")
 
     _save_message(db, current_user.id, "user", user_message, final_mode, conv_id)
-    _save_message(db, current_user.id, "assistant", response_text, final_mode, conv_id)
+    assistant_msg = _save_message(db, current_user.id, "assistant", response_text, final_mode, conv_id)
     conv.updated_at = datetime.now(timezone.utc)
     await db.commit()
+    _record_memory_safe(current_user.id, conv_id, assistant_msg.id, user_message, response_text)
     return ChatResponse(response=response_text, mode=final_mode)
 
 
@@ -382,11 +408,12 @@ async def chat_stream(
                 text_prompt = await _build_stream_prompt(mode, user_message, _db, current_user.id, conv_id)
 
             if isinstance(text_prompt, tuple):
-                _, _msg, _hist, _ctx, _doc_ctx = text_prompt
+                _, _msg, _hist, _ctx, _doc_ctx, _mem_ctx = text_prompt
                 search_query = await _resolve_search_query(llm, _msg, _hist)
                 search_results = await asyncio.to_thread(run_web_search, search_query)
                 text_prompt = (
                     (_doc_ctx if _doc_ctx else "") +
+                    (_mem_ctx if _mem_ctx else "") +
                     (_ctx if _ctx else "") +
                     (f"Previous conversation:\n{_hist}\n" if _hist else "") +
                     f"Based on the following web search results, answer the user's question: '{_msg}'\n\n"
@@ -428,7 +455,7 @@ async def chat_stream(
                     # User message already saved; only persist the assistant reply.
                     if answer:
                         async with AsyncSessionLocal() as _adb:
-                            _save_message(_adb, current_user.id, "assistant", answer, mode, conv_id)
+                            _assistant_msg = _save_message(_adb, current_user.id, "assistant", answer, mode, conv_id)
                             if conv_id:
                                 _conv = (
                                     await _adb.execute(
@@ -438,6 +465,9 @@ async def chat_stream(
                                 if _conv:
                                     _conv.updated_at = datetime.now(timezone.utc)
                             await _adb.commit()
+                            _record_memory_safe(
+                                current_user.id, conv_id, _assistant_msg.id, user_message, answer
+                            )
                 else:
                     # User message wasn't saved yet (error before that point); save both.
                     await _persist_exchange(current_user.id, user_message, answer, mode, conv_id)
