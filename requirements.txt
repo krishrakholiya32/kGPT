@@ -5,8 +5,14 @@ python-dotenv
 
 # ===== LLM (raw HTTP) =====
 # LangChain removed in favour of direct httpx calls to Groq + Gemini
-# (see backend/agent/llm.py). httpx is pinned explicitly.
+# (see backend/agent/llm.py). httpx is pinned explicitly. One deliberate,
+# scoped exception: backend/agent/search_agent.py uses LangGraph for the
+# web-search mode's corrective search-and-grade loop specifically (a real
+# multi-step orchestration problem) — everything else (general chat, RAG
+# retrieval, multi-key provider rotation) stays framework-free.
 httpx>=0.27
+langgraph>=0.2
+langchain-core>=0.3
 
 # ===== Database (async Postgres) =====
 sqlalchemy[asyncio]

@@ -405,6 +405,19 @@ export default function Chat() {
             setTyping(false)
             startAssistantBubble(mode)
             started = true
+          } else if (evt.type === 'status') {
+            // Transient status from the web-search agent (e.g. "Searching the
+            // web…", "Refining the search…") — shown in place of the answer
+            // until the first real chunk arrives, which overwrites it since
+            // updateAssistantContent() replaces the whole bubble content
+            // rather than appending (rawRef.current, the real answer
+            // accumulator, is untouched here).
+            if (!started) {
+              setTyping(false)
+              startAssistantBubble(mode)
+              started = true
+            }
+            updateAssistantContent(evt.text || '')
           } else if (evt.type === 'chunk') {
             if (!started) {
               setTyping(false)

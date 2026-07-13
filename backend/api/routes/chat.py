@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agent import retrieval
 from backend.agent.llm import build_llm, candidate_providers
-from backend.agent.tools import run_web_search
+from backend.agent.search_agent import run_search_agent
 from backend.api.auth import get_current_user
 from backend.api.models.chat import ChatMessage, ChatRequest, ChatResponse, Conversation, ConversationAttachment
 from backend.api.models.knowledge import Document
@@ -164,20 +164,6 @@ async def _history_text_from_db(db, user_id, conversation_id, limit=10) -> str:
     return lines
 
 
-async def _resolve_search_query(llm, user_message, history_text):
-    """If the message is a short follow-up, expand it into a self-contained search query."""
-    if not history_text or len(user_message.split()) > 6:
-        return user_message
-    prompt = (
-        f"Given this conversation history:\n{history_text}\n"
-        f"The user just said: \"{user_message}\"\n"
-        f"Rewrite their message as a single, self-contained web search query "
-        f"(no explanation, just the query):"
-    )
-    query = await llm.ainvoke(prompt)
-    return query.strip().strip('"')
-
-
 async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
     """Execute a single mode with the given LLM. Returns (response_text, sources)."""
     history_text = await _history_text_from_db(db, user_id, conv_id)
@@ -197,8 +183,10 @@ async def _run_mode(llm, mode, user_message, db, user_id, conv_id):
         return await llm.ainvoke("\n".join(parts)), sources
 
     if mode == "web":
-        search_query = await _resolve_search_query(llm, user_message, history_text)
-        search_results = await asyncio.to_thread(run_web_search, search_query)
+        search_results = ""
+        async for event in run_search_agent(llm, user_message, history_text):
+            if event["type"] == "ready":
+                search_results = event["search_results"]
         summary_prompt = (
             (doc_ctx if doc_ctx else "") +
             (mem_ctx if mem_ctx else "") +
@@ -389,8 +377,12 @@ async def chat_stream(
 
             if isinstance(text_prompt, tuple):
                 _, _msg, _hist, _doc_ctx, _mem_ctx = text_prompt
-                search_query = await _resolve_search_query(llm, _msg, _hist)
-                search_results = await asyncio.to_thread(run_web_search, search_query)
+                search_results = ""
+                async for _agent_event in run_search_agent(llm, _msg, _hist):
+                    if _agent_event["type"] == "status":
+                        yield sse({"type": "status", "text": _agent_event["text"]})
+                    elif _agent_event["type"] == "ready":
+                        search_results = _agent_event["search_results"]
                 text_prompt = (
                     (_doc_ctx if _doc_ctx else "") +
                     (_mem_ctx if _mem_ctx else "") +

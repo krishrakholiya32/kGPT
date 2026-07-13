@@ -48,7 +48,7 @@
 
 ## Why I Built This
 
-kGPT was built to explore production-ready AI application development end-to-end. The project focuses on intelligent LLM response streaming, automatic web-search routing, retrieval-augmented document Q&A, cross-conversation memory, and cloud deployment — rather than relying on pre-built chatbot frameworks. Every layer, from the SSE streaming protocol to the idempotent database migrations to the raw-HTTP LLM client to the chunking/embedding/retrieval pipeline, was designed and implemented from scratch (no LangChain, no chat SDKs — local `sentence-transformers` embeddings + pgvector similarity search instead).
+kGPT was built to explore production-ready AI application development end-to-end. The project focuses on intelligent LLM response streaming, automatic web-search routing, retrieval-augmented document Q&A, cross-conversation memory, and cloud deployment — rather than defaulting to pre-built chatbot frameworks everywhere. Chat streaming, RAG retrieval, and multi-provider fallback are all built from scratch (no LangChain, no chat SDKs — raw `httpx` calls, local `sentence-transformers` embeddings + pgvector similarity search). The one deliberate exception is web-search mode, where a bounded **LangGraph** agent handles the search → grade → refine loop — a genuine multi-step orchestration problem, not a framework bolted on where direct code already worked fine.
 
 ---
 
@@ -58,7 +58,7 @@ kGPT was built to explore production-ready AI application development end-to-end
 |---|---------|-------------|
 | 1 | **Intelligent routing** | Every message is classified by the LLM as `general` (direct answer) or `web` (live search + summarise). No mode switching needed. |
 | 2 | **Streaming responses** | Token-by-token streaming over Server-Sent Events with a stop button to cancel mid-generation. |
-| 3 | **Real-time web search** | Live DuckDuckGo results fetched and summarised by the LLM when needed. |
+| 3 | **Real-time web search** | A bounded LangGraph agent (search → grade relevance → refine and retry once if needed) fetches live DuckDuckGo results before the LLM summarises them — corrects itself instead of answering from a bad first search. |
 | 4 | **Unified document upload (RAG)** | One upload flow (chat paperclip or the Documents tab), with a scope choice: **this chat only** or **every conversation, forever**. PDF/DOCX/TXT/MD parsed directly; images described via Gemini/Groq vision. Every file is chunked, embedded locally (`sentence-transformers/all-MiniLM-L6-v2`, no API calls), and retrieved by pgvector cosine similarity — not dumped raw into the prompt. Answers cite which document(s) were used. |
 | 5 | **Cross-conversation memory** | Past exchanges are embedded and semantically recalled from *other* conversations too, so kGPT can reference something you told it days ago in an unrelated chat. |
 | 6 | **Conversation management** | Create, switch, rename, and delete chats. Session persists across page refreshes; fresh chat on login. |
@@ -89,7 +89,7 @@ Try it live at **[kgpt.zrik.tech](https://kgpt.zrik.tech)**
 | **Database** | PostgreSQL + async SQLAlchemy (`asyncpg`), `pgvector` extension with HNSW cosine indexes |
 | **RAG / memory** | `sentence-transformers/all-MiniLM-L6-v2` (local, 384-dim, no API calls) for embeddings; custom paragraph-aware chunker; direct pgvector similarity queries — no LangChain |
 | **Authentication** | JWT (PyJWT) + Argon2 (pwdlib) |
-| **Web search** | DuckDuckGo via `ddgs` |
+| **Web search** | DuckDuckGo via `ddgs`, orchestrated by a bounded **LangGraph** corrective-search agent (search → grade → refine, capped at one retry) |
 | **File extraction** | PyMuPDF (PDF), python-docx (DOCX), Gemini vision → Groq vision fallback (images) |
 | **Frontend** | React 19 + TypeScript + Vite |
 | **Frontend libs** | react-markdown + remark-gfm/remark-math + rehype-katex/rehype-highlight, react-router-dom |
@@ -221,6 +221,7 @@ kgpt/
 │   │   ├── file_extractor.py    # PDF / DOCX / image text extraction (Gemini vision → Groq vision fallback)
 │   │   ├── llm.py               # Raw-httpx LLM client — Gemini/Groq, multi-key rotation, streaming
 │   │   ├── retrieval.py         # pgvector document + cross-conversation memory retrieval
+│   │   ├── search_agent.py      # LangGraph corrective web-search agent (search → grade → refine)
 │   │   └── tools.py             # DuckDuckGo web search
 │   ├── api/
 │   │   ├── auth.py              # JWT auth, register / login (async)
